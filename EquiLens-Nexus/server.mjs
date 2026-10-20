@@ -23,7 +23,7 @@ import { fetchStock, fetchNews, isBulkInstitutional, bulkInstitutions, defaultSo
 import { buildGroupRanking, compareRanks, quotesFromSnapshot, quotesFromReplay, quotesFromDaily, RANK_RULES } from './lib/grouprank.mjs';
 import { EMPTY_SCOPE, validateScope, scopeIds, resolveScope, addGroup, renameGroup, removeGroup, reorderGroups, addStock, removeStock, importGroups, selectedUpdateIds } from './lib/scope.mjs';
 import { patternSnapshot, clearPatterns, updatePatternData } from './lib/pattern-service.mjs';
-import { createStreamPool, splitSymbols, spreadSymbols } from './lib/stream.mjs';
+import { createStreamPool, planStream } from './lib/stream.mjs';
 import { normalizeBooks, checkpoints, buildLiquidity, reduceDay, pickExtras, swapExtras, createBookRecorder, readMeta, writeMeta, compactDay, listBookDays, pruneDays, readStock, toCSV, exportDay } from './lib/bookrec.mjs';
 import { createDayTrade, buildBaseline, normalizeDaytrade, roundTripCost, tzOffset, evaluateSignal, reviewStats, signalTitle, DT_TITLES } from './lib/daytrade.mjs';
 import { createHistoryLoader } from './lib/daytrade-history.mjs';
@@ -203,14 +203,8 @@ const dtSettings=()=>normalizeDaytrade(settings.daytrade);
 // 訂閱規劃：方案（自動時付費方案先試進階，訂閱不足則今天改用開發者）、模式、頻道、股票與連線分組
 function streamPlanNow(p,dtReady=true){
   const s=dtSettings(),want=s.plan==='auto'?(dtFallback===today()?'developer':'advanced'):s.plan;
-  const planId=p.stream.plan?p.stream.plan(providerInfo()[p.id],want):'developer',plan=p.stream.plans?.[planId]||{limit:300,connections:1,perMinute:600},all=streamUniverse();
-  const full=s.enabled&&dtReady&&dtFallback!==today()&&!!p.stream.channels?.full&&watchlist.length*p.stream.channels.full.length<=plan.limit;
-  const channels=full?p.stream.channels.full:(p.stream.channels?.lite||['aggregates']),ids=all.slice(0,Math.floor(plan.limit/channels.length));
-  const groups=full&&plan.connections>1&&ids.length>1?splitSymbols(ids,plan.connections):[ids];
-  // 五檔錄製器加錄：用剩下的訂閱數（保留 50 個餘裕），依代號固定分到各連線
-  const slots=bookSlots(plan.limit-ids.length*channels.length),extra=slots>0?bookExtras(new Set(ids),slots):[];
-  const ex=spreadSymbols(extra,groups.length),book=p.stream.channels?.book||['books'];
-  return{planId,plan,full,channels,ids,total:all.length,slots,extra,groups:groups.map((symbols,i)=>({symbols,channels,extra:{symbols:ex[i]||[],channels:book}}))};
+  const planId=p.stream.plan?p.stream.plan(providerInfo()[p.id],want):'developer';
+  return planStream({spec:p.stream,planId,universe:streamUniverse(),watchlistSize:watchlist.length,fullAllowed:s.enabled&&dtReady&&dtFallback!==today(),bookSlots,bookExtras});
 }
 async function streamTick(){
   const p=data.pick('stream');
@@ -221,7 +215,7 @@ async function streamTick(){
   if(dtSettings().enabled){try{ensureDt();dt.engine.syncIds(streamUniverse());refreshDtMeta(streamUniverse());dtReady=true;}catch(e){dtError=e.message;console.error(t('當沖監控計算失敗：')+e.message);}}
   const plan=streamPlanNow(p,dtReady);
   subscribedIds=new Set(plan.ids);
-  if(dtReady){const e=dt.engine;e.setMode(plan.full?'full':'lite');dtHistory.load({ids:dtScanIds().filter(id=>subscribedIds.has(id)),date:dt.date,source:p.id,engine:e,active:()=>dt?.engine===e&&feedWindow(),interval:Math.ceil(60000/plan.plan.perMinute)+10}).catch(()=>{});}
+  if(dtReady){const e=dt.engine;e.setMode(plan.full?'full':'lite');if(p.streamHistory)dtHistory.load({ids:dtScanIds().filter(id=>subscribedIds.has(id)),date:dt.date,source:p.id,engine:e,active:()=>dt?.engine===e&&feedWindow(),interval:Math.ceil(60000/plan.plan.perMinute)+10}).catch(()=>{});}
   if(stream&&streamState.provider!==p.id){stream.close();stream=null;}
   streamState={...streamState,dtError};
   const meta={provider:p.id,mode:plan.full?'full':'lite',plan:plan.planId,limit:plan.plan.limit,perMinute:plan.plan.perMinute,total:plan.total};

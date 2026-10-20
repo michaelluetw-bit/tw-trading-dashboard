@@ -2927,5 +2927,9 @@
  "大盤順風": "Market tailwind",
  "相對大盤 {0}": "vs market {0}",
  "從 {0} 開始記錄，v2 做多訊號 {1} 則中有 {2} 則有完整大盤資料": "Recorded since {0}; {2} of {1} v2 long signals have complete market data",
- "強弱未記錄": "Strength not recorded"
+ "強弱未記錄": "Strength not recorded",
+ "永豐金 Shioaji 即時行情：經這台電腦上的行情轉接服務（sj-trading 的 sj-quote-bridge），提供盤中雷達、即時看板與自訂提醒用的即時推播。只有精簡模式（每檔 1 個訂閱，上限 200 檔），沒有日 K、分 K 與快照；當沖監控只有精簡模式，五檔錄製器不加錄。轉接服務使用只有行情權限的永豐金金鑰，不能下單。這裡填的是轉接服務的本機通行碼，不是永豐金金鑰。": "SinoPac Shioaji real-time quotes through the local quote bridge on this computer (sj-quote-bridge in sj-trading), feeding the intraday radar, live board and custom alerts. Lite mode only (1 subscription per stock, up to 200 stocks); no daily bars, minute bars or snapshots. Day-trade monitoring runs in lite mode only and the order-book recorder adds no extra stocks. The bridge uses a SinoPac key with market-data permission only and cannot place orders. Enter the bridge's local access token here, not your SinoPac key.",
+ "永豐金 Shioaji（行情轉接）": "SinoPac Shioaji (quote bridge)",
+ "無法連到永豐金行情轉接服務（sj-quote-bridge），請先在 sj-trading 執行 uv run sj-quote-bridge": "Cannot reach the SinoPac quote bridge (sj-quote-bridge). Run uv run sj-quote-bridge in sj-trading first.",
+ "行情轉接服務不接受此通行碼": "The quote bridge rejected this access token"
 }

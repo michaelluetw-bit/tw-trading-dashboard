@@ -13,6 +13,7 @@ Nexus 是唯一資料引擎：Node ES modules＋原生瀏覽器前端，JSON 檔
 - `lib/daytrade-context.mjs`：歷史整理、完整 5／60 分 K 聚合、日／60 分均線、同時段 5 分量比、五檔時間加權與連續性。
 - `lib/daytrade-history.mjs`：序列載入、當日快取、失敗退避、引擎換日／換市場隔離。
 - `lib/providers/fugle.mjs`：富果歷史日 K、1 分 K 與即時成交／分 K／五檔。
+- 用[永豐金 Shioaji 行情轉接](features/shioaji-bridge.md)當即時推播來源時，只有精簡模式，也沒有 30 日多週期歷史，所以不會發出做多確認。
 - `lib/daytrade.mjs`：各股狀態、評分、一次性警示、重新武裝、參考停損及訊號證據。
 - `lib/daytrade-market.mjs`：大盤環境紀錄（加權／櫃買指數狀態、順風／中性／逆風判斷、個股相對強弱）；只記錄，不參與評分。
 - `server.mjs`：觀察名單同步、訂閱、斷線回補、推播、API 與收盤檢討。
