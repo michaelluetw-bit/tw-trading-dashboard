@@ -2931,5 +2931,17 @@
  "永豐金 Shioaji 即時行情：經這台電腦上的行情轉接服務（sj-trading 的 sj-quote-bridge），提供盤中雷達、即時看板與自訂提醒用的即時推播。只有精簡模式（每檔 1 個訂閱，上限 200 檔），沒有日 K、分 K 與快照；當沖監控只有精簡模式，五檔錄製器不加錄。轉接服務使用只有行情權限的永豐金金鑰，不能下單。這裡填的是轉接服務的本機通行碼，不是永豐金金鑰。": "SinoPac Shioaji real-time quotes through the local quote bridge on this computer (sj-quote-bridge in sj-trading), feeding the intraday radar, live board and custom alerts. Lite mode only (1 subscription per stock, up to 200 stocks); no daily bars, minute bars or snapshots. Day-trade monitoring runs in lite mode only and the order-book recorder adds no extra stocks. The bridge uses a SinoPac key with market-data permission only and cannot place orders. Enter the bridge's local access token here, not your SinoPac key.",
  "永豐金 Shioaji（行情轉接）": "SinoPac Shioaji (quote bridge)",
  "無法連到永豐金行情轉接服務（sj-quote-bridge），請先在 sj-trading 執行 uv run sj-quote-bridge": "Cannot reach the SinoPac quote bridge (sj-quote-bridge). Run uv run sj-quote-bridge in sj-trading first.",
- "行情轉接服務不接受此通行碼": "The quote bridge rejected this access token"
+ "行情轉接服務不接受此通行碼": "The quote bridge rejected this access token",
+ "FinMind 沒有全市場個股法人資料時，改用證交所 T86 與櫃買中心三大法人買賣明細；上市、上櫃都必須是查詢日期且有足夠檔數才採用，否則顯示錯誤、不產生排行。": "When FinMind has no market-wide per-stock institutional data, TWSE T86 and the TPEx institutional trading details are used instead. Both TWSE and TPEx data must be for the requested date and cover enough stocks; otherwise an error is shown and no ranking is built.",
+ "FinMind 沒有此日的個股法人資料": "FinMind has no per-stock institutional data for this date",
+ "{market}：回傳日期 {date}": "{market}: response date {date}",
+ "{market}：筆數異常偏低（{covered}／{indexed} 檔）": "{market}: abnormally few stocks ({covered}/{indexed})",
+ "{market}：股票索引沒有此市場": "{market}: no stocks of this market in the index",
+ "{reason}；證交所／櫃買中心沒有 {date} 的資料（非交易日或尚未公布）": "{reason}; TWSE/TPEx have no data for {date} (market closed or not yet published)",
+ "{reason}；證交所／櫃買備援失敗：{error}": "{reason}; TWSE/TPEx fallback failed: {error}",
+ "{reason}；證交所／櫃買備援未採用：{problems}": "{reason}; TWSE/TPEx fallback not used: {problems}",
+ "全市場個股法人資料改用證交所／櫃買中心公開資料（FinMind 免費方案不支援全市場批次查詢）。": "Market-wide per-stock institutional data comes from TWSE/TPEx open data (the FinMind free plan does not support market-wide queries).",
+ "格式錯誤 {count} 列": "{count} malformed rows",
+ "櫃買中心三大法人買賣明細": "TPEx institutional trading details",
+ "證交所三大法人買賣超日報（T86）": "TWSE institutional net buy/sell daily report (T86)"
 }

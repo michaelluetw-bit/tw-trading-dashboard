@@ -41,6 +41,7 @@ export function pick(cap) {
   return order.find(p => hasKey(p) && supports(p, cap)) || null;
 }
 export const has = cap => !!pick(cap);
+const institutionalCheckedProvider = () => enabledProviders().find(p => p.institutionalAllChecked && hasKey(p) && supports(p, 'institutionalAll')) || null;
 // 每種能力目前由哪個資料源提供（設定頁與前端用來決定顯示哪些功能）
 export const capabilityMap = () => Object.fromEntries(Object.keys(CAPABILITIES).map(c => [c, pick(c)?.id || null]));
 
@@ -68,6 +69,9 @@ export const data = {
   indexDetail: async (symbol, opts) => { const p = pick('stream'); if (!p?.indexDetail) return null; return p.indexDetail(symbol, await ctxOf(p, opts)); },
   indexDaily: async (symbol, from, to, opts) => { const p = pick('stream'); if (!p?.indexDaily) return null; return p.indexDaily(symbol, from, to, await ctxOf(p, opts)); },
   streamTrades: async (id, opts) => { const p = pick('stream'); if (!p?.streamTrades) return null; return p.streamTrades(id, await ctxOf(p, opts)); },
+  // 全市場個股法人（分市場回報完整性）：找第一個提供 institutionalAll 且有分市場版本的資料源；檢查與呼叫用同一個資料源
+  institutionalCheckedSource: () => institutionalCheckedProvider()?.id || null,
+  institutionalAllChecked: async (date, opts) => { const p = institutionalCheckedProvider(); if (!p) return null; return p.institutionalAllChecked(date, await ctxOf(p, opts)); },
   universe: (opts) => call('universe', [], opts),
   // 交易日曆；沒有支援的資料源時以平日代替（假日由「當天沒有行情」判斷）
   calendar: async (from, opts) => has('calendar') ? call('calendar', [from], opts) : weekdays(from || addDays(new Date().toISOString().slice(0, 10), -400), addDays(new Date().toISOString().slice(0, 10), 7)),

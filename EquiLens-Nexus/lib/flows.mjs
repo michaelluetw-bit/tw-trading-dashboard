@@ -1,6 +1,7 @@
 import {buildOptions} from './options.mjs';
 import {request} from './finmind.mjs';
 import {todayTW,minusDays,round} from './engine.mjs';
+import {t} from './i18n.mjs';
 export const FLOW_VERSION='2.0';
 export function cacheableFlow(result){return !Object.keys(result.errors).length&&result.options?.available&&result.options.contracts.length>0&&result.summary.available&&result.futures.available&&result.coverage.withRecords>0&&result.rankings.every(r=>r.covered>0);}
 export function validFlowDate(date,latest=todayTW()){return typeof date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(date)&&Number.isFinite(Date.parse(date))&&new Date(date).toISOString().slice(0,10)===date&&date>='2018-06-05'&&date<=latest;}
@@ -18,9 +19,43 @@ export function buildFlows(date,{info=[],stocks=[],total=[],futures=[],options=[
  const position=r=>{const long=amount(r?.long_open_interest_balance_volume),short=amount(r?.short_open_interest_balance_volume);return long===null||short===null?null:{long,short,net:long-short};},now=position(current),before=position(previous);
  return {version:FLOW_VERSION,date,retrievedAt:new Date().toISOString(),summary:{available:totals.length>0,...summary},futures:{available:!!now,asOf:now?date:null,previousDate:before?previous.date:null,...now,netChange:now&&before?now.net-before.net:null,longChange:now&&before?now.long-before.long:null,shortChange:now&&before?now.short-before.short:null},options:buildOptions(date,options,optionDaily),rankings,errors,coverage:{indexed:catalog.size,withRecords:rows.length,returnedRecords:stocks.filter(r=>r.date===date).length},sources:[{title:'期交所選擇權買賣權分計',url:'https://www.taifex.com.tw/cht/3/callsAndPutsDate'},{title:'FinMind 現貨籌碼資料',url:'https://finmind.github.io/tutor/TaiwanMarket/Chip/'},{title:'FinMind 期貨法人資料',url:'https://finmind.github.io/tutor/TaiwanMarket/Derivative/'}]};
 }
-export async function queryFlows(date,{requestData=request,...options}={}){
+// 全市場個股法人備援（證交所 T86＋櫃買中心）：FinMind 沒有資料時使用；必須兩個市場都通過日期、格式與覆蓋率檢查才採用
+export const FALLBACK_MIN_COVERAGE=0.6;
+const INVESTORS=new Set(['Foreign_Investor','Foreign_Dealer_Self','Investment_Trust','Dealer_self','Dealer_Hedging']);
+const FALLBACK_SOURCES=[{title:'證交所三大法人買賣超日報（T86）',url:'https://www.twse.com.tw/zh/trading/foreign/t86.html'},{title:'櫃買中心三大法人買賣明細',url:'https://www.tpex.org.tw/zh-tw/mainboard/trading/major-institutional/detail/day.html'}];
+// 範圍外的證券（ETF、權證等，不在 flowCatalog）略過不檢查；覆蓋率＝同市場、索引內、不重複代號數 ÷ 索引中該市場檔數（60% 只是異常警戒線）
+export function checkFallbackStocks(date,result,catalog){
+ const markets=result?.markets||{},rows=Array.isArray(result?.rows)?result.rows:[];
+ const inScope=rows.filter(r=>catalog.has(String(r?.stock_id)));
+ const badRows=inScope.filter(r=>!INVESTORS.has(r.name)||!Number.isFinite(r.buy)||!Number.isFinite(r.sell)||r.date!==date).length;
+ const empty=!rows.length&&['twse','tpex'].every(k=>!markets[k]?.error);
+ const coverage={},problems=[];
+ for(const [key,market] of [['twse','上市'],['tpex','上櫃']]){
+  const m=markets[key]||{},indexed=[...catalog.values()].filter(c=>c.market===market).length;
+  const covered=new Set(inScope.filter(r=>catalog.get(String(r.stock_id)).market===market).map(r=>r.stock_id)).size;
+  coverage[key]={covered,indexed,ratio:indexed?round(covered/indexed,3):null};
+  const label=t(market);
+  if(m.error)problems.push(t('{market}：{error}',{market:label,error:m.error}));
+  else if(m.date!==date)problems.push(t('{market}：回傳日期 {date}',{market:label,date:m.date||t('無')}));
+  else if(!indexed)problems.push(t('{market}：股票索引沒有此市場',{market:label}));
+  else if(covered/indexed<FALLBACK_MIN_COVERAGE)problems.push(t('{market}：筆數異常偏低（{covered}／{indexed} 檔）',{market:label,covered,indexed}));
+ }
+ if(badRows)problems.push(t('格式錯誤 {count} 列',{count:badRows}));
+ return {ok:!problems.length,empty,problems,coverage,rows:inScope};
+}
+export async function queryFlows(date,{requestData=request,fallbackStocks=null,...options}={}){
  if(!validFlowDate(date))throw new Error('請選擇 2018-06-05 至今天的有效日期');
  const data={},errors={},tasks=[['info','TaiwanStockInfo',{}],['stocks','TaiwanStockInstitutionalInvestorsBuySell',{start_date:date,end_date:date}],['total','TaiwanStockTotalInstitutionalInvestors',{start_date:date,end_date:date}],['futures','TaiwanFuturesInstitutionalInvestors',{data_id:'TX',start_date:minusDays(date,60),end_date:date}],['options','TaiwanOptionInstitutionalInvestors',{data_id:'TXO',start_date:minusDays(date,14),end_date:date}],['optionDaily','TaiwanOptionDaily',{data_id:'TXO',start_date:minusDays(date,7),end_date:date}]];
  let stopped=false;for(const [key,dataset,params] of tasks){if(stopped){errors[key]='前項遇到額度或認證限制，未繼續查詢';continue;}try{data[key]=await requestData(dataset,params,options);}catch(e){errors[key]=e.message;if(e.fatal)stopped=true;}}
- return buildFlows(date,data,errors);
+ let fallback=null;
+ if(fallbackStocks&&!errors.info&&(errors.stocks||!(data.stocks||[]).some(r=>r.date===date))){
+  const reason=errors.stocks||t('FinMind 沒有此日的個股法人資料');
+  try{
+   const check=checkFallbackStocks(date,await fallbackStocks(date),flowCatalog(data.info||[]));
+   if(check.ok){data.stocks=check.rows;delete errors.stocks;fallback=check.coverage;}
+   else errors.stocks=check.empty?t('{reason}；證交所／櫃買中心沒有 {date} 的資料（非交易日或尚未公布）',{reason,date}):t('{reason}；證交所／櫃買備援未採用：{problems}',{reason,problems:check.problems.join(t('、'))});
+  }catch(e){errors.stocks=t('{reason}；證交所／櫃買備援失敗：{error}',{reason,error:e.message});}
+ }
+ const result=buildFlows(date,data,errors);
+ return fallback?{...result,stocksSource:'twse',fallbackCoverage:fallback,sources:[...result.sources,...FALLBACK_SOURCES]}:result;
 }

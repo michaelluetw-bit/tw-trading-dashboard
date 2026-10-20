@@ -109,6 +109,8 @@ function switchMarket(next){
 
 function invalidate() { marketCache = null; clearPatterns(); }
 // 目前資料源能提供的評分因子：沒有法人資料的市場不計籌碼分數
+// 法人／期貨籌碼：FinMind 沒有全市場個股法人時，改用證交所／櫃買中心的分市場資料（lib/flows.mjs 判斷是否完整）
+const flowFallback=()=>data.institutionalCheckedSource()?d=>data.institutionalAllChecked(d):null;
 const factorsNow=()=>FACTORS.filter(f=>f!=='chips'||data.has('institutional')||data.has('institutionalAll'));
 function market() { const day = today(); if (!marketCache || marketCache.cutoff !== day) marketCache = buildMarket(resolveScope(researchScope,universe), raw, evidence, day, settings.weights,researchScope.groups,{factors:factorsNow(),revenue:data.has('revenue'),lot:M().lot}); return marketCache; }
 function inScope(id){return scopeIds(researchScope).includes(id);}
@@ -892,7 +894,7 @@ async function generateDaily(date){
     if(!heat&&!heatBusy&&!job.running&&!flowBusy){try{const h=await runHeatmap(date);if(h.date===date)heat=h;}catch{}}
     if(!heat&&liveHeat?.data?.date===date)heat=liveHeat.data;
     let flows=read('flows-'+date+'.json',null);const fm=data.finmind();
-    if(!flows&&fm&&!heatBusy&&!job.running&&!flowBusy){flowBusy=true;try{const r=await queryFlows(date,{requestData:fm,...fmOpt()});if(cacheableFlow(r))write('flows-'+date+'.json',r);flows=r;}catch{}finally{flowBusy=false;}}
+    if(!flows&&fm&&!heatBusy&&!job.running&&!flowBusy){flowBusy=true;try{const r=await queryFlows(date,{requestData:fm,fallbackStocks:flowFallback(),...fmOpt()});if(cacheableFlow(r))write('flows-'+date+'.json',r);flows=r;}catch{}finally{flowBusy=false;}}
     const lang=language(),board=boardData(watchlist);
     const chips=reportChips(date),hr=new Map((chips?.rank?.rows||[]).map(x=>[x.id,x])),fired=alertsFor(date).list.filter(a=>a.type==='custom');
     // 自選股逐檔資料：報價、量比、大戶週變化、追蹤分點進出、今天觸發的自訂提醒（自選股最多 30 檔）
@@ -1392,7 +1394,7 @@ const server = http.createServer(async (req,res) => {
       if(job.running||flowBusy||heatBusy)return json(res,409,{error:t('已有資料更新或查詢進行中，請稍候')});
       const b=await body(req);if(!validFlowDate(b.date))throw new UserError('請選擇 2018-06-05 至今天的有效日期');const fm=finmind('flows');
       if(job.running||flowBusy||heatBusy)return json(res,409,{error:t('已有資料更新或查詢進行中，請稍候')});flowBusy=true;
-      try{const result=await queryFlows(b.date,{requestData:fm,...fmOpt()});if(cacheableFlow(result))write('flows-'+b.date+'.json',result);return json(res,200,{data:result});}finally{flowBusy=false;}
+      try{const result=await queryFlows(b.date,{requestData:fm,fallbackStocks:flowFallback(),...fmOpt()});if(cacheableFlow(result))write('flows-'+b.date+'.json',result);return json(res,200,{data:result});}finally{flowBusy=false;}
     }
     if (route === '/api/state') {
       const m = market(), c = config();

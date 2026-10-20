@@ -28,6 +28,20 @@
 
 FinMind：`TaiwanStockTotalInstitutionalInvestors`、`TaiwanStockInstitutionalInvestorsBuySell`、`TaiwanFuturesInstitutionalInvestors`、`TaiwanOptionInstitutionalInvestors`、`TaiwanOptionDaily`、`TaiwanStockInfo`。一次查詢約需 1 分鐘（依請求間隔設定）。
 
+**個股法人的備援**：`TaiwanStockInstitutionalInvestorsBuySell` 不指定股票、一次查全市場時需要 FinMind Backer／Sponsor 方案。FinMind 回報錯誤（例如免費方案沒有權限），或沒有查詢日期的資料時，改用證交所「三大法人買賣超日報（T86）」與櫃買中心「三大法人買賣明細」（免金鑰，多 2 個請求）。採用條件：
+
+| 檢查 | 條件 |
+|---|---|
+| 日期 | 上市、上櫃的回應日期都必須等於查詢日期 |
+| 格式 | 股票索引範圍內的每一列，身分必須是 5 種法人之一，買進、賣出必須是數字；範圍外的證券（ETF、權證等）略過 |
+| 筆數 | 分市場計算「有資料的不重複股票 ÷ 股票索引中該市場的檔數」，都必須達 60%（異常警戒線，不代表完整） |
+| 錯誤 | 任一市場連線失敗，整批不採用 |
+
+- 採用時，頁面顯示「全市場個股法人資料改用證交所／櫃買中心公開資料」，出處列出兩個來源。
+- 不採用時，不產生排行，錯誤訊息寫出 FinMind 的原因和每個市場的問題；兩邊都沒有資料時，顯示「非交易日或尚未公布」。
+- 部分成功或失敗的結果不保存，下次可重新查詢。
+- 外資含外資自營商；自營商為自行買賣＋避險。2026-10-20 實測：上市 1,079 檔、上櫃 761 檔，每檔外資＋投信＋自營商都等於官方「三大法人買賣超」欄。
+
 ## 注意事項
 
 - 期貨淨未平倉的增減和「前一個有資料的交易日」比較，不會把缺資料的日子當成 0。

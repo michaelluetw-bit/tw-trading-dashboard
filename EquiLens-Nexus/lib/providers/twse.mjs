@@ -113,10 +113,27 @@ async function daily(id, from, to, ctx) {
   const price = rows.filter(r => r.date && r.date >= from && r.date <= to && r.close > 0);
   return { price, adjusted: price, adjustedIsRaw: true };
 }
+const t86Url = date => `https://www.twse.com.tw/rwd/zh/fund/T86?date=${ymd(date)}&selectType=ALLBUT0999&response=json`;
+const tpexInstitutionalUrl = date => `https://www.tpex.org.tw/www/zh-tw/insti/dailyTrade?type=Daily&sect=EW&date=${tpexDate(date)}&response=json`;
 async function institutionalAll(date, ctx) {
-  const tw = await get(`https://www.twse.com.tw/rwd/zh/fund/T86?date=${ymd(date)}&selectType=ALLBUT0999&response=json`, ctx);
-  const tp = await get(`https://www.tpex.org.tw/www/zh-tw/insti/dailyTrade?type=Daily&sect=EW&date=${tpexDate(date)}&response=json`, ctx);
+  const tw = await get(t86Url(date), ctx);
+  const tp = await get(tpexInstitutionalUrl(date), ctx);
   return [...parseTwseInstitutional(tw, date), ...parseTpexInstitutional(tp, date)];
+}
+// 回應中的日期（T86 與櫃買都是 YYYYMMDD）→ YYYY-MM-DD；沒有日期（例如休市日 T86 只回 stat）時為 null
+const responseDate = body => { const s = String(body?.date ?? ''); return /^\d{8}$/.test(s) ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}` : null; };
+// 全市場個股法人，上市與上櫃分開回報（法人／期貨籌碼頁的備援用）：各市場的回應日期、股票檔數與錯誤，由呼叫端判斷是否完整。
+// 一個市場失敗不影響另一個市場。
+export async function institutionalAllChecked(date, ctx) {
+  const one = async (url, parse) => {
+    try {
+      const body = await get(url, ctx), rows = parse(body, date);
+      return { rows, date: responseDate(body), count: new Set(rows.map(r => r.stock_id)).size, error: null };
+    } catch (e) { return { rows: [], date: null, count: 0, error: e.message }; }
+  };
+  const twse = await one(t86Url(date), parseTwseInstitutional), tpex = await one(tpexInstitutionalUrl(date), parseTpexInstitutional);
+  const info = m => ({ date: m.date, count: m.count, error: m.error });
+  return { rows: [...twse.rows, ...tpex.rows], markets: { twse: info(twse), tpex: info(tpex) } };
 }
 // 最新的本益比／殖利率／股價淨值比（上市＋上櫃全市場一次取回，個股查詢時快取共用）
 let valuationCache = { at: 0, map: new Map() };
@@ -146,7 +163,7 @@ export default {
   id: 'twse', name: '證交所／櫃買中心 開放資料', site: 'https://openapi.twse.com.tw', docs: 'https://openapi.twse.com.tw', markets: ['TW'],
   key: 'none', interval: 2500,
   caps: { universe: 1, calendar: 1, daily: 1, dailyAll: 1, institutional: 'bulk', institutionalAll: 1, valuation: 1, revenue: 'monthly' },
-  universe, calendar, dailyAll, daily, institutionalAll,
+  universe, calendar, dailyAll, daily, institutionalAll, institutionalAllChecked,
   // 個股法人：以全市場單日資料組成（研究名單更新時批次取得，見 research.mjs）
   institutional: async () => { throw new DataError('{label}：法人資料需以全市場批次更新', { label: LABEL }); },
   valuation: async (id, from, to, ctx) => { const v = (await valuationMap(ctx)).get(id); return v ? [{ stock_id: id, ...v }] : []; },
