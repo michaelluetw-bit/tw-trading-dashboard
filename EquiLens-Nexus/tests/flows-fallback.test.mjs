@@ -65,12 +65,13 @@ test('checkFallbackStocks: date mismatch, one-side error, empty index market and
   const noTpex = checkFallbackStocks(date, good, flowCatalog(info.filter(r => r.type === 'twse')));
   assert.match(noTpex.problems.join(), /上櫃：股票索引沒有此市場/);
   const bad = checkFallbackStocks(date, { ...good, rows: [...good.rows, row('2330', 'Unknown'), { ...row('2317'), buy: Number.NaN }, row('6488', 'Investment_Trust', 1, 0, '2026-10-19')] }, catalog);
-  assert.deepEqual([bad.ok, bad.problems], [false, ['格式錯誤 3 列']]);
+  assert.equal(bad.ok, false);
+  assert.ok(bad.problems.includes('格式錯誤 3 列'), bad.problems.join());
 });
 
 test('checkFallbackStocks: abnormally few stocks with the right date are rejected', () => {
   const big = flowCatalog(Array.from({ length: 10 }, (_, i) => ({ stock_id: String(2301 + i), type: i < 5 ? 'twse' : 'tpex', stock_name: 'x', date })));
-  const r = checkFallbackStocks(date, { rows: [row('2301'), row('2306')], markets: good.markets }, big);
+  const r = checkFallbackStocks(date, { rows: [...allInvestors('2301', 1000), ...allInvestors('2306', 1000)], markets: good.markets }, big);
   assert.equal(r.ok, false);
   assert.deepEqual(r.problems, ['上市：筆數異常偏低（1／5 檔）', '上櫃：筆數異常偏低（1／5 檔）']);
 });
@@ -175,7 +176,7 @@ test('institutionalAllChecked: closed day and one-side HTTP error are reported p
   let f = stubFetch(url => url.includes('twse.com.tw') ? fx.t86Closed : fx.tpexClosed);
   try {
     const r = await institutionalAllChecked('2026-10-18', { interval: 0 });
-    assert.deepEqual(r, { rows: [], markets: { twse: { date: null, count: 0, error: null }, tpex: { date: '2026-10-18', count: 0, error: null } } });
+    assert.deepEqual(r, { rows: [], invalid: [], markets: { twse: { date: null, count: 0, error: null }, tpex: { date: '2026-10-18', count: 0, error: null } } });
   } finally { f.restore(); }
   f = stubFetch(url => url.includes('twse.com.tw') ? fx.t86 : new Error('down'));
   try {
@@ -201,4 +202,74 @@ test('wiring: with FinMind and TWSE both enabled (in either order) the TWSE chec
   assert.equal(data.institutionalCheckedSource(), null);
   assert.equal(await data.institutionalAllChecked(date), null);
   useProviders(['finmind', 'twse']);
+});
+
+// ---- 嚴格解析與分類完整性（審查補強）：從原始 JSON 進入 institutionalAllChecked ----
+const clone = v => JSON.parse(JSON.stringify(v));
+async function checkedWith(t86, tpex) {
+  const f = stubFetch(url => url.includes('twse.com.tw') ? t86 : tpex);
+  try { return await institutionalAllChecked(date, { interval: 0 }); } finally { f.restore(); }
+}
+const t86Row = id => fx.t86.data.find(r => r[0].trim() === id);
+
+test('strict parse: short rows and blank/tab/comma/text/huge values are reported in invalid, "0" stays 0', async () => {
+  const bad = clone(fx.t86);
+  const base = t86Row('2317');
+  bad.data = [
+    t86Row('2330'),
+    ['2303', '聯電'],                                                     // short row
+    Object.assign([...base], { 0: '2308', 2: '' }),                         // empty string
+    Object.assign([...base], { 0: '2454', 3: '   ' }),                      // spaces
+    Object.assign([...base], { 0: '2412', 5: '\t' }),                       // tab
+    Object.assign([...base], { 0: '2881', 6: ',' }),                        // lone comma
+    Object.assign([...base], { 0: '2882', 8: 'abc' }),                      // text
+    Object.assign([...base], { 0: '2891', 9: '9'.repeat(400) }),            // not a safe integer
+    Object.assign([...base], { 0: '2317', 5: '0', 6: '0' }),                // real zeros
+  ];
+  const r = await checkedWith(bad, fx.tpex);
+  assert.deepEqual(r.invalid.map(x => x.stock_id).sort(), ['2303', '2308', '2412', '2454', '2881', '2882', '2891']);
+  assert.ok(r.invalid.every(x => x.market === 'twse' && x.reason));
+  assert.deepEqual([...new Set(r.rows.filter(x => x.stock_id.startsWith('2') && x.date).map(x => x.stock_id))].filter(id => ['2330', '2317'].includes(id)).sort(), ['2317', '2330']);
+  const zero = r.rows.find(x => x.stock_id === '2317' && x.name === 'Foreign_Dealer_Self');
+  assert.deepEqual([zero.buy, zero.sell], [0, 0]);
+  assert.equal(r.rows.some(x => ['2303', '2308', '2891'].includes(x.stock_id)), false, 'invalid rows are not turned into zeros');
+});
+
+test('strict parse: a shifted or renamed header rejects the whole market', async () => {
+  const renamed = clone(fx.t86); renamed.fields[8] = '投信買進金額';
+  let r = await checkedWith(renamed, fx.tpex);
+  assert.match(r.markets.twse.error, /欄位格式不符/);
+  assert.equal(r.rows.some(x => ['2330', '2317'].includes(x.stock_id)), false);
+  const shifted = clone(fx.tpex); shifted.tables[0].fields = ['名稱', ...shifted.tables[0].fields.slice(0, -1)];
+  r = await checkedWith(fx.t86, shifted);
+  assert.match(r.markets.tpex.error, /欄位格式不符/);
+  assert.equal(r.markets.twse.error, null);
+});
+
+test('checkFallbackStocks: missing or duplicate investor categories reject the fallback', () => {
+  const missingTrust = { ...good, rows: good.rows.filter(r => !(r.stock_id === '2330' && r.name === 'Investment_Trust')) };
+  let r = checkFallbackStocks(date, missingTrust, catalog);
+  assert.equal(r.ok, false);
+  assert.match(r.problems.join(), /法人分類不完整 1 檔（2330）/);
+  const dupForeign = { ...good, rows: [...good.rows, row('6488', 'Foreign_Investor', 1, 0)] };
+  r = checkFallbackStocks(date, dupForeign, catalog);
+  assert.equal(r.ok, false);
+  assert.match(r.problems.join(), /法人分類不完整 1 檔（6488）/);
+});
+
+test('checkFallbackStocks: invalid rows outside the index are skipped, inside the index they reject', () => {
+  let r = checkFallbackStocks(date, { ...good, invalid: [{ stock_id: '00411A', market: 'tpex', reason: 'short row' }] }, catalog);
+  assert.equal(r.ok, true, r.problems.join());
+  r = checkFallbackStocks(date, { ...good, invalid: [{ stock_id: '2330', market: 'twse', reason: 'short row' }] }, catalog);
+  assert.equal(r.ok, false);
+  assert.match(r.problems.join(), /格式錯誤 1 檔（2330）/);
+});
+
+test('queryFlows: a rejected fallback keeps errors.stocks with the reason; futures and options still load', async () => {
+  const fm = finmind(planError);
+  const r = await queryFlows(date, { requestData: fm.requestData, fallbackStocks: async () => ({ ...good, invalid: [{ stock_id: '2317', market: 'twse', reason: 'short row' }] }) });
+  assert.equal(r.stocksSource, undefined);
+  assert.match(r.errors.stocks, /Sponsor.*證交所／櫃買備援未採用：.*格式錯誤 1 檔（2317）/);
+  assert.equal(Object.keys(r.errors).length, 1);
+  assert.ok(fm.calls.includes('TaiwanFuturesInstitutionalInvestors') && fm.calls.includes('TaiwanOptionDaily'));
 });

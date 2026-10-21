@@ -122,18 +122,52 @@ async function institutionalAll(date, ctx) {
 }
 // 回應中的日期（T86 與櫃買都是 YYYYMMDD）→ YYYY-MM-DD；沒有日期（例如休市日 T86 只回 stat）時為 null
 const responseDate = body => { const s = String(body?.date ?? ''); return /^\d{8}$/.test(s) ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}` : null; };
-// 全市場個股法人，上市與上櫃分開回報（法人／期貨籌碼頁的備援用）：各市場的回應日期、股票檔數與錯誤，由呼叫端判斷是否完整。
-// 一個市場失敗不影響另一個市場。
+// 備援專用的嚴格股數解析：只接受整數格式（可含千分位），空白、Tab、單獨逗號、文字一律視為非法，不補 0；超出安全整數也視為非法。
+// 共用的 num() 會把全空白、Tab、單獨逗號轉成 0，所以這裡不使用它（研究評分用的原解析函式不受影響）。
+export function strictShares(v) {
+  if (typeof v !== 'string' && typeof v !== 'number') return null;
+  const s = String(v).trim();
+  if (!/^-?\d{1,3}(,\d{3})*$/.test(s) && !/^-?\d+$/.test(s)) return null;
+  const n = Number(s.replace(/,/g, ''));
+  return Number.isSafeInteger(n) ? n : null;
+}
+// 表頭核對（零起算索引）：上市 T86 用欄名；上櫃欄名重複，核對欄數、首尾欄名與各組買進、賣出、買賣超的順序
+// 欄名用正規表示式比對（完全相符），與 rwdTable() 的寫法一致；這些是資料來源的表頭，不是介面文字
+const T86_FIELDS = { 0: /^證券代號$/, 2: /^外陸資買進股數\(不含外資自營商\)$/, 3: /^外陸資賣出股數\(不含外資自營商\)$/, 5: /^外資自營商買進股數$/, 6: /^外資自營商賣出股數$/, 8: /^投信買進股數$/, 9: /^投信賣出股數$/, 12: /^自營商買進股數\(自行買賣\)$/, 13: /^自營商賣出股數\(自行買賣\)$/, 15: /^自營商買進股數\(避險\)$/, 16: /^自營商賣出股數\(避險\)$/, 18: /^三大法人買賣超股數$/ };
+const t86HeaderOk = f => Array.isArray(f) && f.length >= 19 && Object.entries(T86_FIELDS).every(([i, re]) => re.test(String(f[i] ?? '')));
+const tpexHeaderOk = f => Array.isArray(f) && f.length === 24 && /^代號$/.test(f[0]) && /^三大法人買賣超股數合計$/.test(f[23]) && [2, 5, 8, 11, 14, 17, 20].every(i => /^買進股數$/.test(f[i]) && /^賣出股數$/.test(f[i + 1]) && /^買賣超股數$/.test(f[i + 2]));
+// 欄位位置（買進、賣出）：外資、外資自營商、投信、自營商自行買賣、自營商避險
+const T86_COLS = [['Foreign_Investor', 2, 3], ['Foreign_Dealer_Self', 5, 6], ['Investment_Trust', 8, 9], ['Dealer_self', 12, 13], ['Dealer_Hedging', 15, 16]];
+const TPEX_COLS = [['Foreign_Investor', 2, 3], ['Foreign_Dealer_Self', 5, 6], ['Investment_Trust', 11, 12], ['Dealer_self', 14, 15], ['Dealer_Hedging', 17, 18]];
+// 原始列 → { rows, invalid }：範圍判斷交給呼叫端（invalid 附代號），這裡只略過非普通股代號格式的有效列
+function strictInstitutional(data, cols, minLen, date, market) {
+  const rows = [], invalid = [];
+  for (const r of Array.isArray(data) ? data : []) {
+    const id = String(r?.[0] ?? '').trim();
+    if (!id) continue;
+    if (!Array.isArray(r) || r.length < minLen) { invalid.push({ stock_id: id, market, reason: 'short row' }); continue; }
+    const vals = cols.map(([name, b, s]) => [name, strictShares(r[b]), strictShares(r[s])]);
+    if (vals.some(([, b, s]) => b == null || s == null)) { invalid.push({ stock_id: id, market, reason: 'invalid number' }); continue; }
+    if (COMMON.test(id)) for (const [name, buy, sell] of vals) rows.push({ date, stock_id: id, name, buy, sell });
+  }
+  return { rows, invalid };
+}
+// 全市場個股法人，上市與上櫃分開回報（法人／期貨籌碼頁的備援用）：各市場的回應日期、股票檔數、錯誤與格式不符的列，由呼叫端判斷是否完整。
+// 一個市場失敗不影響另一個市場；表頭不符時整個市場不採用。
 export async function institutionalAllChecked(date, ctx) {
-  const one = async (url, parse) => {
+  const one = async (url, market) => {
     try {
-      const body = await get(url, ctx), rows = parse(body, date);
-      return { rows, date: responseDate(body), count: new Set(rows.map(r => r.stock_id)).size, error: null };
-    } catch (e) { return { rows: [], date: null, count: 0, error: e.message }; }
+      const body = await get(url, ctx);
+      const table = market === 'twse' ? { fields: body?.fields, data: body?.data } : (body?.tables || [])[0] || {};
+      const data = Array.isArray(table.data) ? table.data : [];
+      if (data.length && !(market === 'twse' ? t86HeaderOk(table.fields) : tpexHeaderOk(table.fields))) return { rows: [], invalid: [], date: responseDate(body), count: 0, error: '欄位格式不符' };
+      const { rows, invalid } = strictInstitutional(data, market === 'twse' ? T86_COLS : TPEX_COLS, market === 'twse' ? 19 : 24, date, market);
+      return { rows, invalid, date: responseDate(body), count: new Set(rows.map(r => r.stock_id)).size, error: null };
+    } catch (e) { return { rows: [], invalid: [], date: null, count: 0, error: e.message }; }
   };
-  const twse = await one(t86Url(date), parseTwseInstitutional), tpex = await one(tpexInstitutionalUrl(date), parseTpexInstitutional);
+  const twse = await one(t86Url(date), 'twse'), tpex = await one(tpexInstitutionalUrl(date), 'tpex');
   const info = m => ({ date: m.date, count: m.count, error: m.error });
-  return { rows: [...twse.rows, ...tpex.rows], markets: { twse: info(twse), tpex: info(tpex) } };
+  return { rows: [...twse.rows, ...tpex.rows], invalid: [...twse.invalid, ...tpex.invalid], markets: { twse: info(twse), tpex: info(tpex) } };
 }
 // 最新的本益比／殖利率／股價淨值比（上市＋上櫃全市場一次取回，個股查詢時快取共用）
 let valuationCache = { at: 0, map: new Map() };

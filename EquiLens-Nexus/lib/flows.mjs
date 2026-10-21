@@ -28,11 +28,17 @@ export function checkFallbackStocks(date,result,catalog){
  const markets=result?.markets||{},rows=Array.isArray(result?.rows)?result.rows:[];
  const inScope=rows.filter(r=>catalog.has(String(r?.stock_id)));
  const badRows=inScope.filter(r=>!INVESTORS.has(r.name)||!Number.isFinite(r.buy)||!Number.isFinite(r.sell)||r.date!==date).length;
- const empty=!rows.length&&['twse','tpex'].every(k=>!markets[k]?.error);
+ // 格式不符的原始列（provider 附代號）：只看股票索引範圍內的股票
+ const invalidIds=[...new Set((Array.isArray(result?.invalid)?result.invalid:[]).map(x=>String(x?.stock_id)).filter(id=>catalog.has(id)))];
+ // 每檔 5 種法人分類必須各有且只有一列
+ const byStock=new Map();for(const r of inScope){const id=String(r.stock_id);if(!byStock.has(id))byStock.set(id,new Map());const m=byStock.get(id);m.set(r.name,(m.get(r.name)||0)+1);}
+ const incomplete=[...byStock].filter(([,m])=>m.size!==INVESTORS.size||[...INVESTORS].some(n=>m.get(n)!==1)).map(([id])=>id);
+ const bad=new Set([...invalidIds,...incomplete]),complete=id=>byStock.has(id)&&!bad.has(id);
+ const empty=!rows.length&&!invalidIds.length&&['twse','tpex'].every(k=>!markets[k]?.error);
  const coverage={},problems=[];
  for(const [key,market] of [['twse','上市'],['tpex','上櫃']]){
   const m=markets[key]||{},indexed=[...catalog.values()].filter(c=>c.market===market).length;
-  const covered=new Set(inScope.filter(r=>catalog.get(String(r.stock_id)).market===market).map(r=>r.stock_id)).size;
+  const covered=[...byStock.keys()].filter(id=>catalog.get(id).market===market&&complete(id)).length;
   coverage[key]={covered,indexed,ratio:indexed?round(covered/indexed,3):null};
   const label=t(market);
   if(m.error)problems.push(t('{market}：{error}',{market:label,error:m.error}));
@@ -40,8 +46,11 @@ export function checkFallbackStocks(date,result,catalog){
   else if(!indexed)problems.push(t('{market}：股票索引沒有此市場',{market:label}));
   else if(covered/indexed<FALLBACK_MIN_COVERAGE)problems.push(t('{market}：筆數異常偏低（{covered}／{indexed} 檔）',{market:label,covered,indexed}));
  }
+ const list=ids=>ids.slice(0,5).join('、')+(ids.length>5?'…':'');
+ if(invalidIds.length)problems.push(t('格式錯誤 {count} 檔（{ids}）',{count:invalidIds.length,ids:list(invalidIds)}));
+ if(incomplete.length)problems.push(t('法人分類不完整 {count} 檔（{ids}）',{count:incomplete.length,ids:list(incomplete)}));
  if(badRows)problems.push(t('格式錯誤 {count} 列',{count:badRows}));
- return {ok:!problems.length,empty,problems,coverage,rows:inScope};
+ return {ok:!problems.length,empty,problems,coverage,rows:inScope.filter(r=>complete(String(r.stock_id)))};
 }
 export async function queryFlows(date,{requestData=request,fallbackStocks=null,...options}={}){
  if(!validFlowDate(date))throw new Error('請選擇 2018-06-05 至今天的有效日期');
