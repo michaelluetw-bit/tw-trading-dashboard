@@ -67,8 +67,10 @@ export function createStream({ spec, key, market, symbols = [], channels = ['agg
       const e = spec.parse(msg, market);
       if (e) { if (onEvent) try { onEvent(e); } catch { } if (e.key) keyed.set(e.key, e); else list.push(e); }
     });
-    sock.addEventListener('close', () => { if (ws === sock) { ws = null; status({ connected: false }); reopen(); } });
-    sock.addEventListener('error', () => { /* close 事件會接著處理重連 */ });
+    const lost = () => { if (ws === sock) { ws = null; status({ connected: false }); reopen(); } };
+    sock.addEventListener('close', lost);
+    // 連線建立前失敗時（例如對方尚未啟動），Node 的 WebSocket 可能只發出 error、不發 close：同樣安排重連；之後若再收到 close 不會重複
+    sock.addEventListener('error', lost);
   }
   function drop() { if (ws) { const s = ws; ws = null; try { s.close(); } catch { } } }
   function reopen(delay = backoff) {
