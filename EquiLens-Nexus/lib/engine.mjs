@@ -1,5 +1,6 @@
+import { adjustedRows, trustedAdjusted } from './adjusted-data.mjs';
 // 四維評分引擎：技術（還原股價均線與動能）、籌碼（法人買賣超，目前只有台股資料源提供）、話題（人工判讀事件）、
-// 行業（所屬族群的趨勢與營收成長）。缺少的因子會排除並重新標準化權重；說明文字依介面語言產生。
+// 行業（所屬族群的趨勢與營收成長）。缺少的分項不產生綜合分數；說明文字依介面語言產生。
 import { activeMarket } from './config.mjs';
 import { localDate } from './markets.mjs';
 import { t as tr } from './i18n.mjs';
@@ -102,11 +103,11 @@ export function topic(news = [], evidence = [], cutoff) {
   return { score: round(score), date: recent.map(e => e.date).sort().at(-1), newsCount: articles.length, evidence: recent, reasons: [tr('{n} 件人工判讀事件；已實現／已確認／待驗證的影響係數為 1／0.65／0.25', { n: recent.length }), tr('事件影響隨時間衰減，90 天後不再計分；原文與判讀可逐筆檢查')] };
 }
 export function summarize(stock, raw = {}, evidence = [], cutoff = marketToday(), lot = activeMarket().lot) {
-  const p = bars(raw.price, cutoff), tech = technical(raw.adjusted, cutoff), c = chips(raw.institutions, raw.price, cutoff, lot), r = revenueGrowth(raw.revenue, cutoff), n = topic(raw.news, evidence, cutoff), latest = p.at(-1);
+  const p = bars(raw.price, cutoff), tech = trustedAdjusted(raw) ? technical(adjustedRows(raw), cutoff) : missing(tr('缺可信還原股價，技術分項不可用')), c = chips(raw.institutions, raw.price, cutoff, lot), r = revenueGrowth(raw.revenue, cutoff), n = topic(raw.news, evidence, cutoff), latest = p.at(-1);
   const per = [...(raw.valuation || [])].filter(x => dateOnly(x.date) <= cutoff).sort((a, b) => a.date.localeCompare(b.date)).at(-1);
   const previous = latest && num(latest.spread) != null && latest.close - num(latest.spread) > 0 ? latest.close - num(latest.spread) : p.at(-2)?.close;
   const freshness = latest ? daysBetween(latest.date, cutoff) : null;
-  return { ...stock, asOf: latest?.date || null, price: latest?.close ?? null, change: latest && previous ? round((latest.close / previous - 1) * 100, 2) : null, volume: round(latest?.Trading_Volume / lot, 0), technical: tech, chips: c, topic: n, revenue: r, industry: missing(tr('同產業資料尚未達到覆蓋門檻')), valuation: { pe: num(per?.PER) > 0 ? num(per.PER) : null, pb: num(per?.PBR) > 0 ? num(per.PBR) : null, yield: num(per?.dividend_yield), date: per?.date || null }, stale: freshness == null || freshness > 7, spark: bars(raw.adjusted, cutoff).slice(-30).map(x => x.close), adjustedIsRaw: !!raw.adjustedIsRaw, errors: raw.errors || {}, fetchedAt: raw.fetchedAt || null, bars: p.slice(-130), adjustedBars: bars(raw.adjusted, cutoff).slice(-150) };
+  return { ...stock, asOf: latest?.date || null, price: latest?.close ?? null, change: latest && previous ? round((latest.close / previous - 1) * 100, 2) : null, volume: round(latest?.Trading_Volume / lot, 0), technical: tech, chips: c, topic: n, revenue: r, industry: missing(tr('同產業資料尚未達到覆蓋門檻')), valuation: { pe: num(per?.PER) > 0 ? num(per.PER) : null, pb: num(per?.PBR) > 0 ? num(per.PBR) : null, yield: num(per?.dividend_yield), date: per?.date || null }, stale: freshness == null || freshness > 7, spark: bars(adjustedRows(raw), cutoff).slice(-30).map(x => x.close), adjustedIsRaw: !!raw.adjustedIsRaw, adjustedTrusted: trustedAdjusted(raw), errors: raw.errors || {}, fetchedAt: raw.fetchedAt || null, bars: p.slice(-130), adjustedBars: bars(adjustedRows(raw), cutoff).slice(-150) };
 }
 // options.factors：目前資料源能提供的因子（例如沒有法人資料的市場不含 chips）；options.revenue：是否有營收資料
 export function buildMarket(universe, rawMap, evidence = [], cutoff = marketToday(), weights = WEIGHTS, customGroups = null, { factors = FACTORS, revenue: hasRevenue = true, lot = activeMarket().lot } = {}) {
@@ -132,7 +133,7 @@ export function buildMarket(universe, rawMap, evidence = [], cutoff = marketToda
       (s.industryContexts ||= []).push({ ...sector, date: eligible.map(e => e.asOf).sort().at(0) || null, reasons });
     }
   }
-  const enabled = FACTORS.filter(k => factors.includes(k)), enabledWeight = enabled.reduce((sum, k) => sum + weights[k], 0) || 100;
+  const enabled = FACTORS.filter(k => factors.includes(k) && weights[k]>0), enabledWeight = enabled.reduce((sum, k) => sum + weights[k], 0) || 100;
   for (const s of stocks) {
     const contexts = s.industryContexts || [], validContexts = contexts.filter(c => c.score != null);
     s.industry = validContexts.length ? { score: round(mean(validContexts.map(c => c.score))), date: validContexts.map(c => c.date).sort()[0], reasons: [tr('所屬族群 {names}；{n}/{total} 個族群可計分', { names: contexts.map(c => c.name).join(tr('、')), n: validContexts.length, total: contexts.length }), ...validContexts.map(c => tr('{name} {score} 分（{n}/{total} 檔有效）；採可用族群分數等權平均', { name: c.name, score: c.score, n: c.covered, total: c.count })), ...contexts.filter(c => c.score == null).flatMap(c => c.reasons)] } : { ...missing(tr('所屬族群尚未達資料門檻')), reasons: contexts.length ? contexts.flatMap(c => c.reasons) : [tr('尚未歸入族群')] };
@@ -141,16 +142,16 @@ export function buildMarket(universe, rawMap, evidence = [], cutoff = marketToda
     const weight = available.reduce((sum, k) => sum + weights[k], 0);
     // 有效權重以「目前市場與資料源能提供的因子」為分母
     s.coverage = round(weight / enabledWeight * 100, 0); s.complete = available.length === enabled.length;
-    s.score = weight && !s.stale ? round(available.reduce((sum, k) => sum + s[k].score * weights[k], 0) / weight) : null;
-    s.rating = s.score == null ? tr('待更新') : `${s.complete ? '' : tr('暫評・')}${tr(s.score >= 75 ? '強勢' : s.score >= 55 ? '中性偏強' : s.score >= 40 ? '中性偏弱' : '弱勢')}`;
+    s.score = s.complete && weight && !s.stale ? round(available.reduce((sum, k) => sum + s[k].score * weights[k], 0) / weight) : null;
+    s.rating = s.score == null ? tr('缺項・不可比較') : `${s.complete ? '' : tr('暫評・')}${tr(s.score >= 75 ? '強勢' : s.score >= 55 ? '中性偏強' : s.score >= 40 ? '中性偏弱' : '弱勢')}`;
     s.risks = [];
-    if (!s.complete) s.risks.push(tr('有效權重 {weight}%，缺漏因子已排除並重新標準化，不宜與完整評分直接比較', { weight: s.coverage }));
+    if (!s.complete) s.risks.push(tr('有效權重 {weight}%，缺漏分項不補零、不重配權重，暫停綜合排名', { weight: s.coverage }));
     if (s.stale) s.risks.push(tr('行情超過 7 個日曆日或尚未取得，暫停綜合評分'));
     if (s.technical.deviation > 15) s.risks.push(tr('距月線超過 15%，留意回檔風險'));
     if (s.chips.net20 < 0) s.risks.push(tr('法人近 20 日累計賣超'));
     if (s.revenue.yoy < 0) s.risks.push(tr('近期營收較去年同期衰退'));
     if (s.valuation.pe == null) s.risks.push(tr('本益比缺值或不適用，未作便宜／昂貴判斷'));
-    if (s.adjustedIsRaw) s.risks.push(tr('資料源沒有還原股價，技術分數以未還原價格計算，除權息前後可能失真'));
+    if (!s.adjustedTrusted) s.risks.push(tr('缺可信還原股價，技術分項不可用'));
     if (s.listingNote) s.risks.push(s.listingNote);
   }
   stocks.sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || a.id.localeCompare(b.id));

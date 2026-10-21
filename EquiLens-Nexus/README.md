@@ -67,3 +67,7 @@ node tools/i18n-keys.mjs --missing en      # 列出還沒有英文翻譯的介�
 ## 補充歷史行情
 
 個股診斷新增分市場、原代號的歷史價格與缺日說明。資料保存於 `.local/history-supplements/`，可透過 `node tools/import-history.mjs bundle.json` 匯入；既有行情不覆寫。詳見[功能說明](../docs/features/history-supplement.md)。
+
+### FinMind 第一階段資料保護
+
+撤銷憑證以非機密狀態持久停用；方案未知不猜數字等級，付費能力需核實證據。舊原始代用資料不作還原價計分；缺項顯示不可比較，原始行情照常。既有來源順序、16:30日報與19:30更新時間不變。詳見[FinMind憑證與可信還原價](../docs/features/finmind-access.md)。

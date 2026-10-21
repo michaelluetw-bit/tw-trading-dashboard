@@ -31,7 +31,11 @@ export async function fetchStock(id, previous = {}, { cutoff, signal, onDataset 
         if (rows.length) { raw[key] = rows; raw.checked[key] = cutoff; delete raw.errors[key]; }
         else { if (!raw[key]?.length) raw[key] = []; delete raw.checked[key]; raw.errors[key] = t('本次未回傳資料；既有資料保留原日期'); }
       }
-      if (byKey.adjustedIsRaw) raw.adjustedIsRaw = true; else if (s.keys.includes('adjusted')) delete raw.adjustedIsRaw;
+      if(s.keys.includes('adjusted')) {
+        if(byKey.adjusted?.length&&byKey.adjustedProvenance)raw.adjustedProvenance=byKey.adjustedProvenance;
+        else if(byKey.adjusted?.length)delete raw.adjustedProvenance;
+      }
+      if (byKey.adjusted?.length) {if (byKey.adjustedIsRaw) raw.adjustedIsRaw = true; else delete raw.adjustedIsRaw;}
     } catch (e) { for (const key of s.keys) raw.errors[key] = e.message; if (e.fatal) { e.partial = raw; e.source = s.label; throw e; } }
   }
   raw.fetchedAt = new Date().toISOString(); return raw;

@@ -181,6 +181,6 @@ export default {
       }
       return rows;
     };
-    return { price: await fetchRange(false), adjusted: await fetchRange(true) };
+    return { price: await fetchRange(false), adjusted: await fetchRange(true), adjustedProvenance:{kind:'adjusted',provider:'fugle',dataset:'historical/candles?adjusted=true',from,to,fetchedAt:new Date().toISOString()} };
   },
 };

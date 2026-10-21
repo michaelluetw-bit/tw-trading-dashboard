@@ -43,3 +43,5 @@
 ## 相關檔案
 
 `EquiLens-Nexus/lib/insight.mjs`、`public/insight-ui.js`、`public/live.js`；快取 `.local/brokers/`、`.local/holders/`、`.local/daily/`、`.local/kbar/`。
+
+FinMind狀態與缺可信還原價的限制，見[憑證與可信還原價](finmind-access.md)。

@@ -20,7 +20,7 @@ mobile UI and Web Push relay. There is no database and no build step: plain ES m
 | `lib/i18n.mjs` | Server-side translation with the same dictionaries as the UI; `UserError` marks messages safe to show |
 | `lib/providers/` | Data sources and the capability router (see below) |
 | `lib/research.mjs` | Per-stock research updates through the router (resumable, keeps old data on empty responses); bulk institutional data for sources that only offer whole-market days |
-| `lib/engine.mjs` | Four-factor scoring; factors the current sources can't provide are excluded and weights renormalized |
+| `lib/engine.mjs` | Four-factor scoring; missing required factors suppress aggregate ranking; adjusted inputs require provenance |
 | `lib/heatmap.mjs` | Sector heatmap from whole-market daily data, live snapshots or local research data |
 | `lib/radar.mjs`, `lib/replay.mjs` | Intraday alerts and the per-minute time-machine recorder |
 | `lib/pricealerts.mjs` | Custom alerts: user rules per stock (price above/below, % up/down, projected volume ratio), checked on every snapshot or stream row; fires on the false→true crossing, one-time rules disable themselves, repeating rules re-arm with a 5-minute cooldown. Rules in `.local/price-alerts.json`; APIs `GET/POST /api/price-alerts`, `POST /api/price-alerts/delete` |
@@ -165,3 +165,7 @@ market rules, the setup and market-switch APIs (on a temporary data folder and p
 ## Supplemental history
 
 `EquiLens-Nexus/lib/history.mjs` validates separate per-market supplemental files and builds a read-only detail view. Original price rows win overlapping dates. Emerging rows expose a null open and a separate previous average; predecessor rows retain their source symbol. The detail API loads supplements lazily without changing scoring inputs. `lib/history-import.mjs` validates the full bundle before creating files exclusively. `public/history-ui.js` and `history.css` are shared by Nexus and Pocket; Pocket forwards history through its authenticated stock endpoint. See [history documentation](features/history-supplement.md).
+
+### FinMind phase-one protection
+
+A non-secret persistent state gates all FinMind requests, including queued work. Unknown subscription entitlements are not inferred from numeric levels. Trusted adjusted provenance is required for technical scores and patterns; incomplete factor sets have no aggregate score. Existing provider preferences and report/update times are unchanged. See [behavior and limitations](features/finmind-access.md).

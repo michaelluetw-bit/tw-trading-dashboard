@@ -1,3 +1,4 @@
+import { access as finmindAccess, allows, confirmedPlan } from '../finmind-access.mjs';
 // 資料源路由：每個資料源宣告支援的市場與能力；依使用者設定為每種能力挑一個可用的資料源。
 // 挑選順序：指定的偏好 → 啟用清單順序；略過沒有金鑰、不支援目前市場、或方案等級不足的資料源。
 import { config, activeMarket } from '../config.mjs';
@@ -25,9 +26,10 @@ export function setProviderInfo(id, info) { const all = providerInfo(); all[id] 
 const intervals = {};
 export function setInterval_(id, ms) { intervals[id] = ms; }
 
-export const hasKey = p => p.key === 'none' || secretConfigured(p.id, p.keyEnv);
+export const hasKey = p => p.id==='finmind' ? finmindAccess.state().credential==='valid' : p.key === 'none' || secretConfigured(p.id, p.keyEnv);
 export function supports(p, cap, market = activeMarket().id) {
   if (!p || !p.markets.includes(market)) return false;
+  if(p.id==='finmind')return allows(confirmedPlan(finmindAccess.state().entitlement),cap);
   const c = p.caps[cap]; if (!c) return false;
   if (Array.isArray(c)) return c.includes(market); // 只在部分市場提供
   // 'sponsor'／'paid'：需付費方案；尚未驗證過等級時先當作可用，失敗時再提示
@@ -47,7 +49,7 @@ export const capabilityMap = () => Object.fromEntries(Object.keys(CAPABILITIES).
 
 async function ctxOf(p, opts = {}) {
   const info = providerInfo()[p.id] || {};
-  return { ...opts, token: undefined, key: p.key === 'none' ? '' : await getSecret(p.id, p.keyEnv), interval: opts.interval ?? intervals[p.id] ?? p.interval, market: activeMarket(), info, perMinute: info.perMinute };
+  return { ...opts, token: undefined, key: p.key === 'none'||p.id==='finmind' ? '' : await getSecret(p.id, p.keyEnv), interval: opts.interval ?? intervals[p.id] ?? p.interval, market: activeMarket(), info, perMinute: info.perMinute };
 }
 async function call(cap, args, opts) {
   const p = pick(cap);
@@ -77,7 +79,7 @@ export const data = {
   calendar: async (from, opts) => has('calendar') ? call('calendar', [from], opts) : weekdays(from || addDays(new Date().toISOString().slice(0, 10), -400), addDays(new Date().toISOString().slice(0, 10), 7)),
   daily: (id, from, to, opts) => call('daily', [id, from, to], opts),
   dailyAll: (date, opts) => call('dailyAll', [date], opts),
-  dailyAllAdjusted: (date, opts) => { const p = pick('dailyAll'); return p?.dailyAllAdjusted ? ctxOf(p, opts).then(ctx => p.dailyAllAdjusted(date, ctx)) : call('dailyAll', [date], opts); },
+  dailyAllAdjusted: (date, opts) => { const p = pick('dailyAll'); return p?.dailyAllAdjusted ? ctxOf(p, opts).then(ctx => p.dailyAllAdjusted(date, ctx)) : Promise.reject(new DataError('缺可信還原股價，技術分項不可用')); },
   snapshot: (ids, opts) => call('snapshot', [ids], opts),
   intraday: (id, date, opts) => call('intraday', [id, date], opts),
   dayTrade: (date, opts) => call('dayTrade', [date], opts),

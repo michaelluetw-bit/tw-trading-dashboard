@@ -2979,5 +2979,13 @@
  "目前沒有盤中資料：即時推播未連線，也沒有快照來源": "No intraday data: the live stream is not connected and there is no snapshot source",
  "格式錯誤 {count} 檔（{ids}）": "{count} stocks with malformed data ({ids})",
  "法人分類不完整 {count} 檔（{ids}）": "{count} stocks with incomplete investor categories ({ids})",
- "欄位格式不符": "Unexpected column layout"
+ "欄位格式不符": "Unexpected column layout",
+ "FinMind 憑證未啟用，已停止請求": "FinMind credential is inactive; requests stopped",
+ "FinMind 資料權限尚未確認": "FinMind data entitlement is unconfirmed",
+ "有效權重 {weight}%，缺漏分項不補零、不重配權重，暫停綜合排名": "Available weight {weight}%; missing factors are not zero-filled or reweighted. Overall ranking is unavailable.",
+ "缺可信還原股價，技術分項不可用": "Trusted adjusted prices unavailable; technical factor disabled",
+ "缺項・不可比較": "Incomplete · not comparable",
+ "憑證狀態": "Credential state",
+ "方案未確認": "Plan unconfirmed",
+ "憑證狀態：{0}": "Credential state: {0}"
 }

@@ -2,7 +2,7 @@ import test from 'node:test';import assert from 'node:assert/strict';import fs f
 import {PATTERNS,permitted,screenPatterns,detectPatterns,tickPrice} from '../lib/patterns.mjs';
 const fixtures=JSON.parse(fs.readFileSync(new URL('./pattern-fixtures.json',import.meta.url),'utf8'));
 const f=fixtures[0],calendar=f.price.map(x=>x.date),cutoff=calendar.at(-1);
-const run=(price=f.price,adjusted=f.adjusted,date=cutoff)=>screenPatterns([f.stock],{[f.stock.id]:{price,adjusted}},date,calendar);
+const run=(price=f.price,adjusted=f.adjusted,date=cutoff)=>screenPatterns([f.stock],{[f.stock.id]:{price,adjusted,adjustedProvenance:{kind:'adjusted',provider:'finmind',dataset:'TaiwanStockPriceAdj',from:'2020-01-01',to:'2030-01-01',fetchedAt:'2026-10-21T00:00:00Z'}}},date,calendar);
 for(const fixture of fixtures)test(`historical regression: ${fixture.pattern} geometry and bounded conditional levels`,()=>{
  const matches=detectPatterns(fixture.adjusted,fixture.price);const m=matches.find(m=>m.id===fixture.pattern);assert(m);assert(m.score>=0&&m.score<=100);assert(m.start<m.end);assert(m.plan.stop<m.plan.entry);assert(m.plan.entry<=m.plan.entryMax);assert(m.anchors.every(x=>x.index>=0&&x.index<90));assert(m.plan.missing.includes('事件'));
 });

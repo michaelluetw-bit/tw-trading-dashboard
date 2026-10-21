@@ -24,7 +24,7 @@
 | 資料源 | 市場 | 金鑰 | 提供 |
 |---|---|---|---|
 | 證交所／櫃買開放資料 | 台股 | 免 | 股票清單、交易日曆、日 K、全市場單日行情、法人、本益比、月營收 |
-| FinMind | 台股 | 免費／Sponsor | 日 K 與還原股價、法人、營收、本益比、新聞、股權分散、期貨、融資；Sponsor 另有盤中即時快照、分 K、全市場資料與新聞、券商分點、全市場股權分散表、當沖盤前資料 |
+| FinMind | 台股 | Free／Backer／Sponsor／unknown | Free個股原始價；Backer還原及全市場單日價；Sponsor分K／快照。付費權限需核實證據，未核籌碼權限暫停，見憑證與可信還原價說明。
 | 富果 Fugle | 台股 | 免費／付費 | 日 K、分 K；WebSocket 即時推播（盤中雷達、自訂提醒、當沖、五檔錄製） |
 | [永豐金 Shioaji](shioaji-bridge.md)（行情轉接） | 台股 | 本機通行碼 | 經本機 `sj-quote-bridge` 的即時推播（精簡模式，上限 200 檔，不能下單） |
 | Twelve Data | 12 個市場 | 免費／付費 | 股票清單、日 K、即時報價、分 K |
@@ -41,3 +41,5 @@
 ## 相關檔案
 
 `EquiLens-Nexus/lib/config.mjs`、`lib/providers/`、`lib/secrets.mjs`、`public/setup.js`、`public/prefs.js`；設定 `.local/config.json`、`.local/settings.json`。
+
+FinMind狀態與缺可信還原價的限制，見[憑證與可信還原價](finmind-access.md)。

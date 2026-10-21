@@ -82,7 +82,7 @@ Australia, Singapore, India.**
 | Data source | Markets | Key | Provides |
 |---|---|---|---|
 | [TWSE / TPEx open data](https://openapi.twse.com.tw) | TW | none | stock list, trading calendar, daily bars, whole-market daily data, institutional flows (whole market by day), P/E, monthly revenue |
-| [FinMind](https://finmindtrade.com) | TW | free / Sponsor | daily and adjusted bars, institutional flows, revenue, P/E, news, shareholding, futures, margin; **Sponsor** adds live snapshots, minute bars, whole-market data, broker branches and the pre-market day-trade list, suspensions and reference prices |
+| [FinMind](https://finmindtrade.com) | TW | Free / Backer / Sponsor / unknown | Raw stock prices at Free; adjusted and whole-market daily prices at Backer; minute bars and snapshots at Sponsor. Paid entitlements require verified evidence; undocumented chip entitlements remain disabled. |
 | [Fugle](https://developer.fugle.tw) | TW | free / paid | daily (adjusted) and minute bars; WebSocket live stream for the intraday radar and day-trade monitoring (subscriptions: Basic 5, Developer 300, Advanced 2,000 — full mode uses trades + 1-minute bars + order book, 3 per stock; otherwise aggregates, 1 per stock); paid plans add a whole-market live snapshot |
 | [SinoPac Shioaji](docs/features/shioaji-bridge.md) (quote bridge) | TW | local bridge token (quote-only SinoPac key) | live stream for the intraday radar, live board and custom alerts through the local `sj-quote-bridge` (aggregates only, up to 200 stocks); cannot place orders |
 | [Twelve Data](https://twelvedata.com) | all 12 markets | free / paid | stock list, daily bars, live quotes, minute bars |
@@ -201,3 +201,7 @@ without warranty, and is not investment advice.
 ## Supplemental price history
 
 Desktop and mobile stock diagnostics can display emerging-market and predecessor-symbol history with dated gap explanations and provenance. Emerging previous averages are never treated as opening prices. Supplements live separately from original prices and do not affect scores or moving averages. See the [feature guide](docs/features/history-supplement.md).
+
+### FinMind phase-one protection
+
+Revoked credentials are persistently blocked using non-secret state. Subscription levels are not guessed from numeric fields. Unproven adjusted prices cannot feed technical scores or patterns; incomplete scores are not ranked. Raw data and existing schedules remain available. See [behavior and limitations](docs/features/finmind-access.md).

@@ -1,3 +1,4 @@
+import { access as finmindAccess, confirmedPlan } from './lib/finmind-access.mjs';
 import http from 'node:http';
 import { loadHistory } from './lib/history.mjs';
 import fs from 'node:fs';
@@ -112,7 +113,7 @@ function invalidate() { marketCache = null; clearPatterns(); }
 // 目前資料源能提供的評分因子：沒有法人資料的市場不計籌碼分數
 // 法人／期貨籌碼：FinMind 沒有全市場個股法人時，改用證交所／櫃買中心的分市場資料（lib/flows.mjs 判斷是否完整）
 const flowFallback=()=>data.institutionalCheckedSource()?d=>data.institutionalAllChecked(d):null;
-const factorsNow=()=>FACTORS.filter(f=>f!=='chips'||data.has('institutional')||data.has('institutionalAll'));
+const factorsNow=()=>M().id==='TW'?FACTORS:FACTORS.filter(f=>f!=='chips'||data.has('institutional')||data.has('institutionalAll'));
 function market() { const day = today(); if (!marketCache || marketCache.cutoff !== day) marketCache = buildMarket(resolveScope(researchScope,universe), raw, evidence, day, settings.weights,researchScope.groups,{factors:factorsNow(),revenue:data.has('revenue'),lot:M().lot}); return marketCache; }
 function inScope(id){return scopeIds(researchScope).includes(id);}
 // 股票清單：資料源提供的全市場清單，加上研究名單的股票資料（沒有清單能力的資料源只靠後者）
@@ -1086,7 +1087,7 @@ async function refreshPatternMarket(){
 function validateWeights(weights) { return weights && Object.keys(WEIGHTS).every(k => Number.isInteger(weights[k]) && weights[k] >= 0 && weights[k] <= 100) && Object.keys(WEIGHTS).reduce((s,k) => s + weights[k],0) === 100; }
 
 /* ---------- 設定：市場、語言、資料源、推理模型 ---------- */
-const providerStatus=()=>{const c=config(),info=providerInfo();return Object.values(PROVIDERS).map(p=>({id:p.id,name:t(p.name),site:p.site,docs:p.docs,markets:p.markets,key:p.key,keyEnv:p.keyEnv||null,configured:hasKey(p),enabled:c.providers.enabled.includes(p.id),supportsMarket:p.markets.includes(c.market),caps:Object.keys(CAPABILITIES).filter(cap=>supports(p,cap)),plan:info[p.id]?{plan:info[p.id].plan,tier:info[p.id].tier,checkedAt:info[p.id].checkedAt}:null}));};
+const providerStatus=()=>{const c=config(),info=providerInfo();return Object.values(PROVIDERS).map(p=>({id:p.id,name:t(p.name),site:p.site,docs:p.docs,markets:p.markets,key:p.key,keyEnv:p.keyEnv||null,credential:p.id==='finmind'?finmindAccess.state().credential:undefined,entitlement:p.id==='finmind'?confirmedPlan(finmindAccess.state().entitlement):undefined,configured:hasKey(p),enabled:c.providers.enabled.includes(p.id),supportsMarket:p.markets.includes(c.market),caps:Object.keys(CAPABILITIES).filter(cap=>supports(p,cap)),plan:info[p.id]?{plan:info[p.id].plan,tier:info[p.id].tier,checkedAt:info[p.id].checkedAt}:null}));};
 const llmStatus=()=>{const l=config().llm;return{...l,configured:llmConfigured(),providers:LLM_PROVIDERS.map(id=>({id,name:t(LLM_INFO[id].name),site:LLM_INFO[id].site,keyEnv:LLM_INFO[id].keyEnv,defaultModel:LLM_INFO[id].defaultModel,suggested:LLM_INFO[id].suggested||[],keyOptional:!!LLM_INFO[id].keyOptional,needsBaseUrl:!!LLM_INFO[id].needsBaseUrl,configured:secretConfigured(id,LLM_INFO[id].keyEnv)}))};};
 function configInfo(){
   const c=config();
@@ -1128,7 +1129,7 @@ async function saveProviderKey(id,key){
   if(!keyText(key))throw new UserError('請輸入有效的金鑰');
   if(job.running)throw new UserError('請等待更新完成或停止後，再變更金鑰');
   // 以資料源的驗證端點測試金鑰並記錄方案等級；金鑰本身不會出現在網址、紀錄或回應中
-  const info=await p.validate(key);await saveSecret(p.id,key);setProviderInfo(p.id,info||{});
+  const info=await p.validate(key,{candidate:true});await saveSecret(p.id,key);if(id==='finmind')finmindAccess.activate();setProviderInfo(p.id,info||{});
   const c=config();if(!c.providers.enabled.includes(p.id))saveConfig({providers:{...c.providers,enabled:[...c.providers.enabled,p.id]}});
   providersChanged();return info;
 }
@@ -1228,7 +1229,7 @@ const server = http.createServer(async (req,res) => {
     }
     if(route==='/api/provider-check'&&req.method==='POST'){ // 重新驗證已保存的金鑰（例如續訂付費方案後）
       const b=await body(req),p=PROVIDERS[b.id];if(!p||p.key==='none'||!hasKey(p))throw new UserError('請先設定此資料源的金鑰');
-      const info=await p.validate(await getSecret(p.id,p.keyEnv));setProviderInfo(p.id,info||{});providersChanged();return json(res,200,{ok:true,...configInfo()});
+      if(p.id==='finmind')finmindAccess.assert({validation:true});const info=await p.validate(await getSecret(p.id,p.keyEnv));setProviderInfo(p.id,info||{});providersChanged();return json(res,200,{ok:true,...configInfo()});
     }
     if(route==='/api/llm'&&req.method==='POST'){
       const b=await body(req),l=config().llm;

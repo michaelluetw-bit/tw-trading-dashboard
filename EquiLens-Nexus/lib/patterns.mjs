@@ -1,3 +1,4 @@
+import { trustedAdjusted } from './adjusted-data.mjs';
 import { bars, mean, round, clamp, daysBetween, marketToday } from './engine.mjs';
 import { activeMarket } from './config.mjs';
 import { roundTick } from './markets.mjs';
@@ -143,6 +144,7 @@ export function screenPatterns(universe,raw,cutoff=marketToday(),calendar=[],mar
   for(const stock of universe){
     if(!permitted(stock,market)){excluded.push({...stock,reason:tr('產業／普通股範圍排除')});continue;}
     const data=raw[stock.id]||{},prices=bars(data.price,cutoff),adjusted=bars(data.adjusted,cutoff),pm=new Map(prices.map(x=>[x.date,x])),am=new Map(adjusted.map(x=>[x.date,x]));
+    if(!trustedAdjusted(data)){excluded.push({...stock,reason:tr('缺可信還原股價，技術分項不可用')});continue;}
     const p=dates.map(d=>pm.get(d)),a=dates.map(d=>am.get(d));
     if(dates.length!==90||p.some(x=>!x)||a.some(x=>!x)){excluded.push({...stock,reason:tr('不足完整 90 個市場交易日原始／還原資料')});continue;}
     if(daysBetween(dates.at(-1),cutoff)>7){excluded.push({...stock,reason:tr('行情已超過 7 個日曆日，待更新')});continue;}
