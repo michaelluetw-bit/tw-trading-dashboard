@@ -595,7 +595,8 @@ function boardGroups(){
   if(boardGroupCache.key===key)return boardGroupCache.data;
   let quotes=new Map();
   if(live.length)quotes=quotesFromSnapshot(live,grMeta());else if(lastSnap)quotes=quotesFromSnapshot(lastSnap.rows,grMeta());else{const day=replayToday();if(day?.frames.length)quotes=quotesFromReplay(day,grMeta());}
-  const stats=new Map(buildGroupRanking(researchScope.groups,quotes).map(g=>[g.id,g]));
+  // 盤中推播排名與族群排名頁相同：報價覆蓋不到八成的族群不給分數
+  const stats=new Map(buildGroupRanking(researchScope.groups,quotes,live.length?{...RANK_RULES,minCoverage:.8}:RANK_RULES).map(g=>[g.id,g]));
   const groups=researchScope.groups.map(g=>{const s=stats.get(g.id);return{id:g.id,name:g.name,count:g.stockIds.length,score:s?.score??null,rank:s?.rank??null,up:s?.up??0,down:s?.down??0,amount:s?.amount||0};});
   boardGroupCache={key,data:groups};return groups;
 }
