@@ -20,3 +20,7 @@ cd ../EquiLens-Nexus && PLAYWRIGHT=$(npm root -g)/playwright/index.mjs node tool
 
 PNG 轉成 WebP（品質 82）後放進 `docs/images/`；手機版六張合成一張 `mobile-overview.webp`。
 當沖觀察名單在盤中才有內容，`capture.mjs` 以示意的掃描結果取代 `/api/daytrade` 的回應。
+
+## 補充歷史行情截圖
+
+使用獨立示意資料目錄執行 `EQUITY_DATA_DIR=<示意目錄> node tools/screenshots/demo-history.mjs`，再沿用上面的離線 clock 啟動 Nexus/Pocket（4391/4392）。手機示意密碼為 `demo-password-123`。執行 `PLAYWRIGHT=<playwright/index.mjs> node tools/screenshots/capture-history.mjs <輸出目錄>`；若使用已安裝的 Chrome，可加 `PLAYWRIGHT_CHANNEL=chrome`。此流程驗證興櫃開盤欄、前身原代號與登入後的手機顯示。

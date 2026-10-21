@@ -1,3 +1,4 @@
+import { renderHistory } from './history-ui.js';
 import { renderFlowCards, downloadFlowCard } from './flow-cards.js';
 import { initHeatmap, heatPage, mountHeatmap } from './heatmap.js';
 import { initBriefing, briefPage, mountBriefing } from './briefing.js';
@@ -265,6 +266,7 @@ function renderDetail(s) {
   <div class="detailbody"><div class="summaryband"><div class="bigscore">${fmt(s.score)}<small> /100</small></div><div class="summarytext"><strong>${esc(s.rating)} <span class="tag cyan">有效權重 ${s.coverage}%</span></strong><p>${s.complete ? '四維資料完整，可進一步檢視風險與估值。' : '部分因子仍待補齊；分數僅反映目前可用資料。'}<br>觀察期間 1–3 個月 · 不代表預測報酬或合理價值</p></div><button style="margin-left:auto" data-update-stock="${s.id}" ${state.job.running ? 'disabled' : ''}>⟳ 更新</button></div>
   <div class="factorcards">${Object.entries(factorNames).map(([k, l]) => `<div class="factorcard"><h3>${l} <small>${state.weights[k]}%</small></h3><b>${fmt(s[k].score)}</b><small>${s[k].date || '資料不足'}</small></div>`).join('')}</div>
   <section class="chartpanel"><div class="charttitle"><h3>中期價格結構</h3><div class="chartlegend"><span style="color:${C.ma20}">— MA20 ${fmt(s.technical.ma20, 1)}</span><span style="color:${C.ma60}">— MA60 ${fmt(s.technical.ma60, 1)}</span><span style="color:${C.ma120}">— MA120 ${fmt(s.technical.ma120, 1)}</span></div></div>${candleChart(s.adjustedBars)}<p class="chartcaption">${s.adjustedIsRaw ? '資料源沒有還原股價，K 線及均線使用原始價格；除權息前後可能失真。' : 'K 線及均線使用還原價格；上方收盤為原始成交價，除權息期間兩者可能不同。'}</p></section>
+  ${renderHistory(s.history)}
   <section class="panel"><div class="panelhead"><h3>估值與營運快照</h3><span class="fine">獨立呈現，不計入強弱分數</span></div><div class="tablewrap"><table><thead><tr><th>本益比 PER</th><th>股價淨值比 PBR</th><th>殖利率</th><th>近三月營收年增</th></tr></thead><tbody><tr><td class="num">${fmt(s.valuation.pe, 2)} 倍</td><td class="num">${fmt(s.valuation.pb, 2)} 倍</td><td class="num">${fmt(s.valuation.yield, 2)}%</td><td class="num ${cls(s.revenue.yoy)}">${pct(s.revenue.yoy)}</td></tr></tbody></table></div><div class="tablefoot">估值 ${s.valuation.date || '缺值'} · 營收期間 ${s.revenue.period || '缺值'} · 公布 ${s.revenue.date || '缺值'}</div></section>
   ${detailExtrasShell({ id: s.id, name: s.name, close: s.price })}
   <section class="diagnosis"><h3>分項診斷與證據</h3><table><tbody>${Object.entries(factorNames).map(([k, l]) => `<tr><td>${l}</td><td>${s[k].reasons.map(r => esc(r)).join('<br>')}</td></tr>`).join('')}</tbody></table></section>

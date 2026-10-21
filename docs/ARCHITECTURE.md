@@ -161,3 +161,7 @@ README screenshots live in `docs/images/` and are regenerated with `EquiLens-Nex
 
 `npm test` in each component. Nexus tests cover scoring, patterns, heatmap, radar, replay, providers' row handling,
 market rules, the setup and market-switch APIs (on a temporary data folder and port), secrets and translations.
+
+## Supplemental history
+
+`EquiLens-Nexus/lib/history.mjs` validates separate per-market supplemental files and builds a read-only detail view. Original price rows win overlapping dates. Emerging rows expose a null open and a separate previous average; predecessor rows retain their source symbol. The detail API loads supplements lazily without changing scoring inputs. `lib/history-import.mjs` validates the full bundle before creating files exclusively. `public/history-ui.js` and `history.css` are shared by Nexus and Pocket; Pocket forwards history through its authenticated stock endpoint. See [history documentation](features/history-supplement.md).

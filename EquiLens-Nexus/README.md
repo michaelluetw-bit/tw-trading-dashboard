@@ -63,3 +63,7 @@ node tools/i18n-keys.mjs --missing en      # 列出還沒有英文翻譯的介�
 模組說明與擴充方式（新增資料源、市場、AI 服務、語言）見 [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)。
 
 研究資訊，非交易建議。
+
+## 補充歷史行情
+
+個股診斷新增分市場、原代號的歷史價格與缺日說明。資料保存於 `.local/history-supplements/`，可透過 `node tools/import-history.mjs bundle.json` 匯入；既有行情不覆寫。詳見[功能說明](../docs/features/history-supplement.md)。

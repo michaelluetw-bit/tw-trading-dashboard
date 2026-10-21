@@ -37,6 +37,6 @@ test('screen translation: exact, template, segmented and unit conversion', () =>
 test('shared front-end modules are identical in Nexus and Pocket', () => {
   const pocket = path.join(root, '..', 'EquiLens-Pocket', 'public');
   if (!fs.existsSync(pocket)) return;
-  for (const f of ['i18n.js', 'market.js', 'insight-ui.js', 'report-card.js', 'flow-cards.js', 'save-image.js', 'intraday.js'])
+  for (const f of ['i18n.js', 'market.js', 'insight-ui.js', 'report-card.js', 'flow-cards.js', 'save-image.js', 'intraday.js', 'history-ui.js', 'history.css'])
     assert.equal(fs.readFileSync(path.join(pocket, f), 'utf8').replace(/\r/g, ''), fs.readFileSync(path.join(root, 'public', f), 'utf8').replace(/\r/g, ''), `${f} differs; copy EquiLens-Nexus/public/${f} to EquiLens-Pocket/public/`);
 });

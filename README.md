@@ -197,3 +197,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how markets, data sources, 
 
 Market data belongs to its providers; respect each provider's terms and plan limits. EquiLens is provided as is,
 without warranty, and is not investment advice.
+
+## Supplemental price history
+
+Desktop and mobile stock diagnostics can display emerging-market and predecessor-symbol history with dated gap explanations and provenance. Emerging previous averages are never treated as opening prices. Supplements live separately from original prices and do not affect scores or moving averages. See the [feature guide](docs/features/history-supplement.md).

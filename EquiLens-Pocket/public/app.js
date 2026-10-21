@@ -1,3 +1,4 @@
+import { renderHistory } from './history-ui.js';
 import { aggregate, renderTreemap, heatColor } from './heatmap.js';
 import { renderFlowCards, downloadFlowCard } from './flow-cards.js';
 import { initChips, loadChips, brokersView, holdersView } from './chips.js';
@@ -301,6 +302,7 @@ async function openStock(id) {
       <div class="upd-row" style="margin-bottom:12px"><button class="btn" data-upd-stock="${s.id}">⟳ 更新此股資料</button><button class="btn" data-news="${s.id}">📰 取得近三日新聞</button></div>
       <section class="card"><div class="card-h"><h2>四維評分<small>有效權重 ${s.coverage}%</small></h2></div><div class="card-b">${s.factors.map((f, i) => `<div class="factor"><span>${FACTORS[i][1]} <small class="soft">${s.weights?.[f.key] ?? ''}%</small></span><span class="track"><i style="width:${f.score ?? 0}%"></i></span><b class="num">${f.score == null ? '—' : fmt(f.score)}</b></div>`).join('')}</div></section>
       <section class="card"><div class="card-h"><h2>近 90 日 K 線</h2></div><div class="card-b">${kline(s.bars)}<div class="chart-tip num" id="ktip">按住圖表查看每日價格</div><div class="legend"><span style="color:var(--amber)">━ MA20 ${fmt(s.tech.ma20, 1)}</span><span style="color:var(--violet)">━ MA60 ${fmt(s.tech.ma60, 1)}</span><span>還原價格</span></div></div></section>
+      ${renderHistory(s.history)}
       ${rulesCard({ id: s.id, name: s.name, close: s.price })}${stockExtrasShell(s.id)}
       <section class="card"><div class="card-h"><h2>重點數據</h2></div><div class="card-b grid4">${[['20 日報酬', pct(s.tech.r20, 1), cls(s.tech.r20)], ['60 日報酬', pct(s.tech.r60, 1), cls(s.tech.r60)], ['法人 5 日', sign(s.chips.net5) + ' 張', cls(s.chips.net5)], ['法人 20 日', sign(s.chips.net20) + ' 張', cls(s.chips.net20)], ['本益比', fmt(s.valuation.pe, 1) + ' 倍', ''], ['股價淨值比', fmt(s.valuation.pb, 2) + ' 倍', ''], ['殖利率', fmt(s.valuation.yield, 2) + '%', ''], ['近三月營收年增', pct(s.revenue.yoy, 1), cls(s.revenue.yoy)]].map(([a, b, c]) => `<div class="stat"><span>${a}</span><b class="num ${c}">${b}</b></div>`).join('')}</div></section>
       ${s.risks.length ? `<section class="card"><div class="card-h"><h2>需要留意</h2></div><ul class="reasons risk">${s.risks.map(r => `<li>${esc(r)}</li>`).join('')}</ul></section>` : ''}

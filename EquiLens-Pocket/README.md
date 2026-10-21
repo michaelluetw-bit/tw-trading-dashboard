@@ -137,3 +137,7 @@ npm test
 ```
 
 研究資訊，非交易建議。
+
+## 補充歷史行情
+
+手機個股診斷顯示 Nexus 提供的補充行情、原代號及缺日原因。興櫃前日均價另列，未改成開盤價；資料仍受 Pocket 登入保護。詳見[功能說明](../docs/features/history-supplement.md)。

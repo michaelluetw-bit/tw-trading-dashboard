@@ -124,7 +124,7 @@ export function slimDetail(s) {
     factors: ['technical', 'chips', 'topic', 'industry'].map(key => ({ key, score: s[key]?.score ?? null, date: s[key]?.date || null, reasons: s[key]?.reasons || [] })),
     tech: { ma20: s.technical?.ma20, ma60: s.technical?.ma60, ma120: s.technical?.ma120, r20: s.technical?.r20, r60: s.technical?.r60 },
     chips: { net5: s.chips?.net5, net20: s.chips?.net20, positive: s.chips?.positive },
-    valuation: s.valuation || {}, revenue: s.revenue || {},
+    valuation: s.valuation || {}, revenue: s.revenue || {}, history: s.history || null,
     bars: k.map((r, i) => [r.date, r.open ?? r.close, r.max ?? r.close, r.min ?? r.close, r.close, m20[off + i], m60[off + i]]),
     news: (s.news || []).slice().sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 12).map(n => ({ title: n.title, date: n.date, source: n.source, url: n.link })),
     evidence: (s.evidence || []).map(e => ({ title: e.title, date: e.date, direction: e.direction, stage: e.stage, url: e.url })),
