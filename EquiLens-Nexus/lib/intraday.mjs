@@ -54,3 +54,16 @@ export function seriesFromCandles(candles, p) {
   }
   return out;
 }
+
+// 推播與快照中時間（date 欄位 'YYYY-MM-DD HH:MM:SS'）較新的一筆；時間相同時用推播；只有一邊時用那一邊
+export function newerRow(streamRow, snapRow) {
+  if (!streamRow) return snapRow || null;
+  return !snapRow || String(streamRow.date) >= String(snapRow.date) ? streamRow : snapRow;
+}
+
+// 推播每分鐘最後成交價（Map 'HH:MM' → 價格）→ 看板走勢圖的點 [[盤中位置 0–1, 價格], …]；位置為 null（盤外）或價格不大於 0 的略過
+export function sparkFromMinutes(minutes, posOf) {
+  const out = [];
+  for (const [t, price] of minutes || []) { const x = posOf(t); if (x != null && price > 0) out.push([x, price]); }
+  return out.sort((a, b) => a[0] - b[0]);
+}

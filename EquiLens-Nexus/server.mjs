@@ -6,7 +6,7 @@ import { ROOT, LOCAL, read, write, readStocks, safeSymbol } from './lib/storage.
 import { getSecret, saveSecret, secretConfigured, deleteSecret, secretBackend } from './lib/secrets.mjs';
 import { config, saveConfig, activeMarket, language, upColor, LANGUAGES, LLM_PROVIDERS, TUNNEL_MODES, HOST_RE, EMAIL_RE } from './lib/config.mjs';
 import { MARKETS, MARKET_IDS, localParts, closeHM, clientMarket, minuteOf, elapsedTrading, limitPrices } from './lib/markets.mjs';
-import { seriesFromBars, seriesFromReplay, seriesFromCandles, replayRef, vwapLine, groupLine } from './lib/intraday.mjs';
+import { seriesFromBars, seriesFromReplay, seriesFromCandles, replayRef, vwapLine, groupLine, newerRow, sparkFromMinutes } from './lib/intraday.mjs';
 import { t, UserError, isUserError } from './lib/i18n.mjs';
 import { data, PROVIDERS, CAPABILITIES, capabilityMap, providerInfo, setProviderInfo, setInterval_, hasKey, supports } from './lib/providers/index.mjs';
 import { LLM_INFO, listModels } from './lib/llm.mjs';
@@ -52,7 +52,7 @@ let researchScope, universe, raw, evidence, watchlist, watchGroups, job, control
 let flowBusy=false,heatBusy=false,reportBusy=false;
 let liveHeat=null,livePending=null,lastSnap=null,monitorPauseUntil=0,monitorError='';
 // 盤中即時推播（WebSocket）：連線、狀態與各股最新一筆資料
-let stream=null,streamState={provider:null,connected:false,symbols:0,subscribed:0,limit:0,lastAt:0,error:'',since:0},streamRows=new Map(),streamDate='',streamAsOf='',yvCache={date:'',map:new Map()};
+let stream=null,streamState={provider:null,connected:false,symbols:0,subscribed:0,limit:0,lastAt:0,error:'',since:0},streamRows=new Map(),streamMinutes=new Map(),streamDate='',streamAsOf='',yvCache={date:'',map:new Map()};
 // 當沖監控：引擎（每日一個）、股票資料、盤前資料、斷線補資料進度、今天是否因訂閱數不足改用精簡模式
 let dt=null,dtMeta=new Map(),dtPrep={date:'',busy:false,data:null,at:0},dtSaved='',dtFallback='',backfill={busy:false,again:false,started:0,done:0,total:0,error:''};
 const dtHistory=createHistoryLoader({read,write:(name,value)=>{fs.mkdirSync(path.join(LOCAL,'daytrade-history'),{recursive:true});write(name,value);},fetchHistory:(...args)=>data.streamHistory(...args)});
@@ -181,7 +181,7 @@ const liveAsOf=()=>{const a=lastSnap?.asOf||'',b=streamFresh()?streamAsOf:'';ret
 // 某股某日最新的盤中資料：推播與快照取時間較新的一筆
 function liveRow(id,date){
   const s=streamFor(id),f=lastSnap&&(!date||lastSnap.date===date)?lastSnap.byId.get(id):null;
-  return s&&(!date||String(s.date).slice(0,10)===date)&&(!f||String(s.date)>=String(f.date))?s:f;
+  return newerRow(s&&(!date||String(s.date).slice(0,10)===date)?s:null,f);
 }
 // 推播資料沒有昨量：用快照的昨量，或本機日 K 前一交易日的量（爆量判斷用）
 function yesterdayVolume(id,date){
@@ -191,8 +191,12 @@ function yesterdayVolume(id,date){
 }
 function onStreamRows(rows){
   const date=today(),fresh=rows.filter(r=>String(r.date).slice(0,10)===date);
-  if(streamDate!==date){streamDate=date;streamRows=new Map();streamAsOf='';}
-  for(const r of fresh){r.yesterday_volume=yesterdayVolume(r.stock_id,date);streamRows.set(r.stock_id,r);if(String(r.date)>streamAsOf)streamAsOf=String(r.date);}
+  if(streamDate!==date){streamDate=date;streamRows=new Map();streamMinutes=new Map();streamAsOf='';}
+  for(const r of fresh){
+    r.yesterday_volume=yesterdayVolume(r.stock_id,date);streamRows.set(r.stock_id,r);if(String(r.date)>streamAsOf)streamAsOf=String(r.date);
+    // 看板走勢圖：每檔每分鐘最後成交價（不依賴當沖引擎）
+    const hm=String(r.date).slice(11,16),c=Number(r.close);if(hm.length===5&&c>0){let mm=streamMinutes.get(r.stock_id);if(!mm)streamMinutes.set(r.stock_id,mm=new Map());mm.set(hm,c);}
+  }
   streamState={...streamState,lastAt:Date.now()};
   if(fresh.length)try{runRadar(date,fresh);}catch(e){console.error(t('異動雷達失敗：')+e.message);}
 }
@@ -564,7 +568,7 @@ const snapRow=(id,date)=>lastSnap&&(!date||lastSnap.date===date)?lastSnap.byId.g
 // 時間（HH:MM 或 HH:MM:SS）在全日交易時段中的位置（0–1，扣除午休）
 const sessionPos=t=>{const m=minuteOf(t);if(m==null)return null;const p=M(),sec=Number(String(t).slice(6,8))||0;return Math.min(1,Math.max(0,(elapsedTrading(p,m)+sec/60)/(p.length||1)));};
 function quoteOf(id,{board=false}={}){
-  const r=board?snapRow(id):liveRow(id); // 看板只用快照；其他（例如新聞事件）用推播與快照中較新的一筆
+  const r=liveRow(id); // 推播與快照中較新的一筆（看板也一樣：訂閱即時推播的股票用推播，其他用快照）
   if(r){const close=Number(r.close),ch=Number(r.change_price),prev=close-ch,n=v=>v==null||v===''?null:Number(v);return{close,change:prev>0?Math.round(ch/prev*1e4)/100:null,changePrice:ch,open:Number(r.open),high:Number(r.high),low:Number(r.low),volume:Number(r.total_volume),amount:Number(r.total_amount),yesterdayVolume:Number(r.yesterday_volume),bid:Number(r.buy_price),ask:Number(r.sell_price),volumeAtBid:n(r.volume_at_bid),volumeAtAsk:n(r.volume_at_ask),source:r===streamFor(id)?'stream':'snapshot',time:String(r.date).slice(11,19),date:String(r.date).slice(0,10)};}
   return null;
 }
@@ -573,13 +577,15 @@ function boardData(ids){
   const stocks=ids.map(id=>{
     const s=m.stocks.find(x=>x.id===id),q=quoteOf(id,{board:true}),i=idx.get(id);
     // 全日走勢圖：時光機每分鐘一點，橫軸位置＝該時間在全日交易時段中的比例（0＝開盤、1＝收盤）；最後一點換成最新快照（每 10 秒移動）
-    const pts=i==null?[]:day.frames.map(f=>[sessionPos(f.t),framePrice(day,f,i)]).filter(([x,v])=>x!=null&&v>0);
+    let pts=i==null?[]:day.frames.map(f=>[sessionPos(f.t),framePrice(day,f,i)]).filter(([x,v])=>x!=null&&v>0);
+    // 時光機沒有這檔（例如快照額度用完）：改用推播的每分鐘價格
+    if(!pts.length&&streamFor(id))pts=sparkFromMinutes(streamMinutes.get(id),sessionPos);
     if(q?.close>0&&day?.date===q.date&&pts.length){const pt=[sessionPos(q.time),q.close];if(q.time.slice(0,5)===day.frames.at(-1)?.t)pts[pts.length-1]=pt;else if(pt[0]>=pts.at(-1)[0])pts.push(pt);}
     let quote=q;if(!quote&&i!=null&&day.frames.length){const f=day.frames.at(-1),close=framePrice(day,f,i),prev=prevPrice(day,i);if(close>0)quote={close,change:prev>0?Math.round((close/prev-1)*1e4)/100:null,changePrice:prev>0?Math.round((close-prev)*1e4)/1e4:null,amount:frameAmount(day,f,i),time:f.t,date:day.date};}
     const step=Math.max(1,Math.ceil(pts.length/135)),use=pts.filter((_,k)=>k%step===0||k===pts.length-1);
-    return{id,name:s?.name||meta.get(id)?.name||id,sector:s?.sector||meta.get(id)?.sector||'',score:s?.score??null,prev:i==null?null:prevPrice(day,i),quote,daily:s?{price:s.price,change:s.change,asOf:s.asOf}:null,spark:use.map(p=>p[1]),sparkX:use.map(p=>Math.round(p[0]*1e4)/1e4)};
+    return{id,name:s?.name||meta.get(id)?.name||id,sector:s?.sector||meta.get(id)?.sector||'',score:s?.score??null,prev:i==null?(q?.close>0&&Number.isFinite(q.changePrice)?Math.round((q.close-q.changePrice)*1e4)/1e4:null):prevPrice(day,i),quote,daily:s?{price:s.price,change:s.change,asOf:s.asOf}:null,spark:use.map(p=>p[1]),sparkX:use.map(p=>Math.round(p[0]*1e4)/1e4)};
   });
-  return{live:!!lastSnap&&liveWindow(),stream:false,asOf:lastSnap?.asOf||null,date:lastSnap?.date||day?.date||null,stocks};
+  return{live:(!!lastSnap||streamFresh())&&liveWindow(),stream:streamFresh(),asOf:liveAsOf(),date:lastSnap?.date||(streamFresh()?streamDate:null)||day?.date||null,stocks};
 }
 // 看板族群切換列：研究總覽各族群目前的量能加權漲幅（與族群排名同算法；同一份快照只算一次）
 function boardGroups(){
