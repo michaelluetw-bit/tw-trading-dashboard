@@ -2972,5 +2972,9 @@
  "開盤價": "Open",
  "歷史行情圖表": "Historical price chart",
  "圖表可左右滑動；精確數值請展開逐日行情。": "Swipe the chart horizontally. Expand daily prices for exact values.",
- "補充行情不參與評分及均線計算。": "Supplemental history does not affect scores or moving averages."
+ "補充行情不參與評分及均線計算。": "Supplemental history does not affect scores or moving averages.",
+ "{0} 檔計入{1}": "{0} stocks counted{1}",
+ "報價不足（覆蓋 {0}%）": "Not enough quotes ({0}% covered)",
+ "暫定收盤排名，正式日資料更新後自動校正。": "Provisional closing ranking; corrected automatically when the official daily data is updated.",
+ "目前沒有盤中資料：即時推播未連線，也沒有快照來源": "No intraday data: the live stream is not connected and there is no snapshot source"
 }
