@@ -20,7 +20,7 @@ import { remoteConfig, isRemoteHost, verifyAccessJwt } from './lib/access.mjs';
 import { FUTURES, nearMonth, retailPosition, marginSummary, indexRow, assembleCard } from './lib/market-card.mjs';
 import { buildMarket, marketToday, WEIGHTS, FACTORS, minusDays, bars as priceBars } from './lib/engine.mjs';
 import { fetchStock, fetchNews, isBulkInstitutional, bulkInstitutions, defaultSources } from './lib/research.mjs';
-import { buildGroupRanking, compareRanks, quotesFromSnapshot, quotesFromReplay, quotesFromDaily, RANK_RULES } from './lib/grouprank.mjs';
+import { buildGroupRanking, compareRanks, quotesFromSnapshot, quotesFromReplay, quotesFromDaily, RANK_RULES, liveRowsFor, closeRecordPlan } from './lib/grouprank.mjs';
 import { EMPTY_SCOPE, validateScope, scopeIds, resolveScope, addGroup, renameGroup, removeGroup, reorderGroups, addStock, removeStock, importGroups, selectedUpdateIds } from './lib/scope.mjs';
 import { patternSnapshot, clearPatterns, updatePatternData } from './lib/pattern-service.mjs';
 import { createStreamPool, planStream } from './lib/stream.mjs';
@@ -589,10 +589,12 @@ function boardData(ids){
 }
 // 看板族群切換列：研究總覽各族群目前的量能加權漲幅（與族群排名同算法；同一份快照只算一次）
 function boardGroups(){
-  const key=lastSnap?`s${lastSnap.at}`:`r${listDays().at(-1)||''}:${researchScope.groups.length}`;
+  // 快取鍵含來源健康狀態：推播或快照過期時，即使沒有新訊息，快取也會失效
+  const live=liveWindow()?liveScopeRows(today()):[],sf=streamFresh(),nf=snapFresh();
+  const key=live.length?`l${today()}:${sf}:${nf}:${lastSnap?.at||0}:${Math.floor((streamState.lastAt||0)/1e4)}:${researchScope.groups.length}`:lastSnap?`s${lastSnap.at}:${sf}:${nf}`:`r${listDays().at(-1)||''}:${researchScope.groups.length}`;
   if(boardGroupCache.key===key)return boardGroupCache.data;
   let quotes=new Map();
-  if(lastSnap)quotes=quotesFromSnapshot(lastSnap.rows,grMeta());else{const day=replayToday();if(day?.frames.length)quotes=quotesFromReplay(day,grMeta());}
+  if(live.length)quotes=quotesFromSnapshot(live,grMeta());else if(lastSnap)quotes=quotesFromSnapshot(lastSnap.rows,grMeta());else{const day=replayToday();if(day?.frames.length)quotes=quotesFromReplay(day,grMeta());}
   const stats=new Map(buildGroupRanking(researchScope.groups,quotes).map(g=>[g.id,g]));
   const groups=researchScope.groups.map(g=>{const s=stats.get(g.id);return{id:g.id,name:g.name,count:g.stockIds.length,score:s?.score??null,rank:s?.rank??null,up:s?.up??0,down:s?.down??0,amount:s?.amount||0};});
   boardGroupCache={key,data:groups};return groups;
@@ -814,18 +816,39 @@ const grDates=()=>{try{return fs.readdirSync(LOCAL).map(f=>/^grouprank-(\d{4}-\d
 // 前一個「有排名」的收盤紀錄（略過資料不足的空紀錄）
 const grPrev=date=>{for(const d of grDates().filter(x=>x<date).reverse()){const r=read(`grouprank-${d}.json`,null);if(r?.groups?.some(g=>g.rank))return r;}return null;};
 const grMeta=()=>new Map(market().stocks.map(s=>[s.id,{name:s.name}]));
-const grCover=q=>{const scope=new Set(researchScope.groups.flatMap(g=>g.stockIds));return scope.size?[...scope].filter(id=>q.has(id)).length/scope.size:0;};
-// 收盤紀錄來源依序：時光機收盤畫格 → 當日快照 → 本機日成交（每日更新後才有），取第一個涵蓋八成以上成分股者
-function grCloseQuotes(date){
-  const day=loadDay(date);
-  if(day?.frames.length&&day.frames.at(-1).t>=closeHM(M())){const q=quotesFromReplay(day,grMeta());if(grCover(q)>=.8)return q;}
-  if(lastSnap?.date===date){const q=quotesFromSnapshot(lastSnap.rows,grMeta());if(grCover(q)>=.8)return q;}
-  const q=quotesFromDaily(market().stocks,date);return grCover(q)>=.8?q:null;
+// 快照是否仍有效：2 個快照間隔＋30 秒內取得
+const snapFresh=()=>!!lastSnap&&Date.now()-lastSnap.at<2*snapPlan().every+30e3;
+// 研究名單的盤中行情列：推播（健康時）與快照（未過期時）取行情事件時間較新者，只留當日
+function liveScopeRows(date){
+  const ids=[...new Set(researchScope.groups.flatMap(g=>g.stockIds))];
+  return liveRowsFor({ids,date,stream:{healthy:streamFresh(),rowOf:id=>streamRows.get(id)},snap:{fresh:snapFresh(),rowOf:id=>snapRow(id,date)}});
 }
-function grPack(date,quotes,source){
-  const ranked=buildGroupRanking(researchScope.groups,quotes),prev=grPrev(date),times=[...quotes.values()].map(q=>q.time).filter(Boolean).sort();
+const grCover=q=>{const scope=new Set(researchScope.groups.flatMap(g=>g.stockIds));return scope.size?[...scope].filter(id=>q.has(id)).length/scope.size:0;};
+// 收盤紀錄的來源：暫定＝盤中來源（時光機收盤畫格、當日快照、當日推播收盤行情，取覆蓋率最高者）；正式＝本機日成交（每日更新後才有）
+function grCloseSources(date){
+  const day=loadDay(date),cands=[];
+  if(day?.frames.length&&day.frames.at(-1).t>=closeHM(M()))cands.push(['replay',quotesFromReplay(day,grMeta())]);
+  if(lastSnap?.date===date)cands.push(['snapshot',quotesFromSnapshot(lastSnap.rows,grMeta())]);
+  if(streamDate===date&&streamRows.size)cands.push(['stream',quotesFromSnapshot([...streamRows.values()].filter(r=>String(r.date).slice(0,10)===date),grMeta())]);
+  let provisional=null;for(const [basis,quotes] of cands){const coverage=grCover(quotes);if(!provisional||coverage>provisional.coverage)provisional={basis,quotes,coverage};}
+  const fq=quotesFromDaily(market().stocks,date);
+  return{provisional,final:fq.size?{quotes:fq,coverage:grCover(fq)}:null};
+}
+// 依 closeRecordPlan 寫收盤紀錄（暫定或正式）；回傳寫入的紀錄或 null。force：手動補建時忽略既有紀錄
+function grCloseRecord(date,{force=false}={}){
+  const existing=force?null:read(`grouprank-${date}.json`,null),src=grCloseSources(date);
+  const plan=closeRecordPlan({existing,provisional:src.provisional&&{basis:src.provisional.basis,coverage:src.provisional.coverage},final:src.final&&{coverage:src.final.coverage}});
+  const scope=[...new Set(researchScope.groups.flatMap(g=>g.stockIds))],cov=v=>Math.round(v*1000)/1000;
+  let d=null;
+  if(plan.write==='final')d={...grPack(date,src.final.quotes,'close'),coverage:cov(src.final.coverage),missing:scope.filter(id=>!src.final.quotes.has(id)),...(plan.revise?{revisedFrom:{builtAt:existing.builtAt,basis:existing.basis||null,coverage:existing.coverage??null}}:{})};
+  else if(plan.write==='provisional')d={...grPack(date,src.provisional.quotes,'close-provisional'),basis:plan.basis,coverage:cov(src.provisional.coverage)};
+  if(d)write(`grouprank-${date}.json`,d);
+  return d;
+}
+function grPack(date,quotes,source,rules=RANK_RULES){
+  const ranked=buildGroupRanking(researchScope.groups,quotes,rules),prev=grPrev(date),times=[...quotes.values()].map(q=>q.time).filter(Boolean).sort();
   const scope=new Set(researchScope.groups.flatMap(g=>g.stockIds));
-  return{date,source,asOf:times.at(-1)||null,builtAt:new Date().toISOString(),stocks:scope.size,quoted:[...scope].filter(id=>quotes.has(id)).length,rules:RANK_RULES,compare:prev?{date:prev.date}:null,groups:compareRanks(ranked,prev)};
+  return{date,source,asOf:times.at(-1)||null,builtAt:new Date().toISOString(),stocks:scope.size,quoted:[...scope].filter(id=>quotes.has(id)).length,rules,compare:prev?{date:prev.date}:null,groups:compareRanks(ranked,prev)};
 }
 // 最新一個交易日的快照列（盤中監控 15 秒內的資料直接沿用）
 async function latestSnapRows(){
@@ -838,18 +861,26 @@ async function queryGroupRank(force=false){
   if(!force&&grLive.data&&Date.now()-grLive.at<10000)return grLive.data;
   // 非盤中且已有當日收盤紀錄時直接沿用
   if(!liveWindow()){const last=grDates().at(-1),rec=last?read(`grouprank-${last}.json`,null):null;if(rec&&rec.date>=(lastSnap?.date||today())){grLive={at:Date.now(),data:rec};return rec;}}
+  // 盤中：推播與快照中較新的一筆（只用健康的來源）；每個族群報價覆蓋率不到八成時不給名次
+  if(liveWindow()){
+    const date=today(),rows=liveScopeRows(date);
+    if(rows.length){const pack=grPack(date,quotesFromSnapshot(rows,grMeta()),'live',{...RANK_RULES,minCoverage:.8});grLive={at:Date.now(),data:pack};return pack;}
+    if(!data.has('snapshot'))throw new UserError('目前沒有盤中資料：即時推播未連線，也沒有快照來源');
+  }
   const {date,rows}=await latestSnapRows();if(!rows.length)throw new UserError('目前取不到行情快照');
   const pack=grPack(date,quotesFromSnapshot(rows,grMeta()),date===today()&&liveWindow()?'live':'close');
   grLive={at:Date.now(),data:pack};return pack;
 }
 setInterval(()=>{
   const x=clock(),date=x.date;
-  if(!researchScope.groups.length||x.weekday<1||x.weekday>5||x.minute<M().close+5||grDates().includes(date))return;
+  if(!researchScope.groups.length||x.weekday<1||x.weekday>5||x.minute<M().close+5)return;
+  if(read(`grouprank-${date}.json`,null)?.source==='close')return; // 已由正式日資料定稿
   if(grAttempt.date===date&&Date.now()-grAttempt.at<5*60e3)return;grAttempt={date,at:Date.now()};
-  // 優先用本機資料（時光機收盤畫格、快照、日成交，不需請求）；都不足時再取一次快照。資料日期不是今天（休市）或涵蓋不足就不存，5 分鐘後重試
-  const q=grCloseQuotes(date);if(q){write(`grouprank-${date}.json`,grPack(date,q,'close'));return;}
+  // 盤中來源（時光機、快照、推播）先存暫定版；每日更新後由本機日成交定稿。資料日期不是今天（休市）或涵蓋不足就不存，5 分鐘後重試
+  let rec=null;try{rec=grCloseRecord(date);}catch(e){console.error(t('族群排名收盤紀錄失敗：')+e.message);return;}
+  if(rec||read(`grouprank-${date}.json`,null))return;
   if(Date.now()<monitorPauseUntil||!data.has('snapshot'))return; // 快照暫停中（例如方案不足），等每日更新後用日成交補建
-  latestSnapRows().then(({date:d,rows})=>{const q=d===date?quotesFromSnapshot(rows,grMeta()):null;if(q&&grCover(q)>=.8)write(`grouprank-${date}.json`,grPack(date,q,'close'));}).catch(e=>console.error(t('族群排名收盤紀錄失敗：')+e.message));
+  latestSnapRows().then(({date:d,rows})=>{if(d!==date||read(`grouprank-${date}.json`,null))return;const q=quotesFromSnapshot(rows,grMeta()),c=grCover(q);if(closeRecordPlan({existing:null,provisional:{basis:'snapshot',coverage:c},final:null}).write==='provisional')write(`grouprank-${date}.json`,{...grPack(date,q,'close-provisional'),basis:'snapshot',coverage:Math.round(c*1000)/1000});}).catch(e=>console.error(t('族群排名收盤紀錄失敗：')+e.message));
 },30000).unref();
 
 /* ---------- 新聞推播 ---------- */
@@ -1359,9 +1390,9 @@ const server = http.createServer(async (req,res) => {
     /* ----- 族群排名 ----- */
     if(route==='/api/grouprank/query'&&req.method==='POST')return json(res,200,await once('grouprank',()=>queryGroupRank()));
     if(route==='/api/grouprank/close'&&req.method==='POST'){ // 以時光機紀錄或本機日成交補建指定交易日的收盤排名
-      const b=await body(req);if(!validHeatDate(b.date))throw new UserError('請選擇有效日期');const q=grCloseQuotes(b.date);
-      if(!q)throw new UserError('此日沒有足夠的收盤資料（時光機紀錄或本機日成交），無法補建族群排名');
-      const d=grPack(b.date,q,'close');write(`grouprank-${b.date}.json`,d);return json(res,200,d);
+      const b=await body(req);if(!validHeatDate(b.date))throw new UserError('請選擇有效日期');const d=grCloseRecord(b.date,{force:true});
+      if(!d)throw new UserError('此日沒有足夠的收盤資料（時光機紀錄或本機日成交），無法補建族群排名');
+      return json(res,200,d);
     }
     if(route==='/api/grouprank'&&req.method==='GET'){
       const dates=grDates();let date=url.searchParams.get('date');if(!date||date==='latest')date=dates.at(-1)||null;else if(!validHeatDate(date))throw new UserError('請選擇有效日期');

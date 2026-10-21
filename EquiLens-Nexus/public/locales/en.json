@@ -2943,5 +2943,9 @@
  "全市場個股法人資料改用證交所／櫃買中心公開資料（FinMind 免費方案不支援全市場批次查詢）。": "Market-wide per-stock institutional data comes from TWSE/TPEx open data (the FinMind free plan does not support market-wide queries).",
  "格式錯誤 {count} 列": "{count} malformed rows",
  "櫃買中心三大法人買賣明細": "TPEx institutional trading details",
- "證交所三大法人買賣超日報（T86）": "TWSE institutional net buy/sell daily report (T86)"
+ "證交所三大法人買賣超日報（T86）": "TWSE institutional net buy/sell daily report (T86)",
+ "{0} 檔計入{1}": "{0} stocks counted{1}",
+ "報價不足（覆蓋 {0}%）": "Not enough quotes ({0}% covered)",
+ "暫定收盤排名，正式日資料更新後自動校正。": "Provisional closing ranking; corrected automatically when the official daily data is updated.",
+ "目前沒有盤中資料：即時推播未連線，也沒有快照來源": "No intraday data: the live stream is not connected and there is no snapshot source"
 }
