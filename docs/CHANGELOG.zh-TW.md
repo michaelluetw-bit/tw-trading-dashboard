@@ -1,3 +1,21 @@
+## 2026-10-22 · Shioaji 熱浪最小整合至 main
+
+- 以 main 67545d3 為基底，加入 Shioaji provider、連線建立失敗重試及熱浪修正版。保留權證追蹤與分點日期功能，未移入 FinMind 權限改寫或其他旁支功能。
+- Shioaji 沒有 REST 補資料時不回灌當沖舊報價；開啟當沖監控的重連也須等待新報價。
+- Windows 憑證測試限定 Windows 執行，避免在 macOS 呼叫共用鑰匙圈。
+- 見[熱浪功能](features/heatmap.md)與[Shioaji 整合範圍](features/shioaji-bridge.md)。
+
+## 2026-10-22 · Shioaji 熱浪複查修正
+
+- 重新訂閱立即標示斷線，清除舊連線待處理報價；部分訂閱另顯示警示及確認數。
+- 修正時光機點板塊錯誤與手機「全市場」標籤，歷史查詢以最後一次選擇為準。
+- 丟棄跨日延遲即時回應；初次載入取消再啟用後仍會定時更新。
+- 補上斷線緩衝、歷史順序、回放點選、跨日與初載操作的回歸測試。見[資金熱浪](features/heatmap.md)。
+
+## 2026-10-22 · Shioaji 研究範圍盤中熱浪
+
+盤中熱浪圖選用 Shioaji 時沿用既有最多 200 檔訂閱，顯示研究範圍、有效普通股報價數、報價時間與斷線狀態；不新增訂閱或查詢永豐金快照。全市場盤後及歷史查詢保留，時光機錄製仍需快照來源。 桌面與手機同步呈現；斷線與無當日報價時不沿用舊圖。見[資金熱浪](features/heatmap.md)與[Shioaji 轉接](features/shioaji-bridge.md)。
+
 # 衡析版本紀錄
 
 每次更新都記在這裡，最新的在最上面。各功能的完整說明見[功能說明](features/README.md)。
@@ -25,6 +43,11 @@
 - GitHub 倉庫改名為 `tw-trading-dashboard`；README 的下載指令改用新網址（舊網址 GitHub 會自動轉址）。
 - [README](../README.zh-TW.md) 依功能加入電腦版各頁與手機版的截圖（`docs/images/`）；截圖使用示意資料，不是真實行情。
 - 新增截圖工具 `EquiLens-Nexus/tools/screenshots/`：產生示意資料、固定時間與斷開對外連線後自動截圖，之後改版可重新產生。
+
+## 2026-10-20 · 新增永豐金 Shioaji 即時行情（行情轉接）
+
+- 新資料源「永豐金 Shioaji（行情轉接）」：經本機的行情轉接服務（sj-trading 的 `sj-quote-bridge`）提供盤中雷達與自訂提醒的即時推播。每檔 1 個 Quote 訂閱，上限 200 檔，只有精簡模式。轉接服務只用行情專用金鑰，不能下單。見[永豐金 Shioaji 即時行情](features/shioaji-bridge.md)。
+- 訂閱規劃移到 `lib/stream.mjs` 的 `planStream`：資料源沒有五檔頻道時不加錄；資料源沒有 30 日歷史時不載入當沖歷史。富果的行為不變。
 
 ## 2026-10-16 · 點任何股票看走勢與五檔、大盤指數卡
 

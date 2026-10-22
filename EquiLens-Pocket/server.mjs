@@ -18,7 +18,7 @@ const extraHosts = [...(config.hosts || []), ...String(process.env.MOBILE_HOSTS 
 
 const STATIC = {
   '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/app.css': ['app.css', 'text/css; charset=utf-8'],
-  '/heatmap.js': ['heatmap.js', 'text/javascript; charset=utf-8'], '/flow-cards.js': ['flow-cards.js', 'text/javascript; charset=utf-8'],
+  '/heatmap.js': ['heatmap.js', 'text/javascript; charset=utf-8'], '/heat-feed.js': ['heat-feed.js', 'text/javascript; charset=utf-8'], '/flow-cards.js': ['flow-cards.js', 'text/javascript; charset=utf-8'],
   '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'], '/icon.svg': ['icon.svg', 'image/svg+xml'],
   '/sw.js': ['sw.js', 'text/javascript; charset=utf-8'], '/live.js': ['live.js', 'text/javascript; charset=utf-8'], '/chips.js': ['chips.js', 'text/javascript; charset=utf-8'], '/intraday.js': ['intraday.js', 'text/javascript; charset=utf-8'], '/insight-ui.js': ['insight-ui.js', 'text/javascript; charset=utf-8'], '/report-card.js': ['report-card.js', 'text/javascript; charset=utf-8'], '/save-image.js': ['save-image.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/market.js': ['market.js', 'text/javascript; charset=utf-8'],  '/icon-192.png': ['icon-192.png', 'image/png'], '/badge-96.png': ['badge-96.png', 'image/png'], '/icon-512.png': ['icon-512.png', 'image/png'], '/apple-touch-icon.png': ['icon-192.png', 'image/png'],
 };

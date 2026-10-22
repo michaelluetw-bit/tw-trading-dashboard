@@ -20,3 +20,13 @@ cd ../EquiLens-Nexus && PLAYWRIGHT=$(npm root -g)/playwright/index.mjs node tool
 
 PNG 轉成 WebP（品質 82）後放進 `docs/images/`；手機版六張合成一張 `mobile-overview.webp`。
 當沖觀察名單在盤中才有內容，`capture.mjs` 以示意的掃描結果取代 `/api/daytrade` 的回應。
+
+## Shioaji 研究範圍熱浪截圖
+
+沿用上述示意資料目錄，將資料源設為 `shioaji`、關閉每日更新並啟用盤中監控。只在此獨立測試環境使用 `DEMO_TIME=2026-10-22T10:00:00+08:00 SHIOAJI_BRIDGE_TOKEN=offline-test node --import ./tests/helpers/heat-stream-offline.mjs server.mjs`。測試模組會取代 WebSocket 並阻擋對外 HTTP，使用合成報價，絕不連接券商。不要在正式啟動命令載入此模組。
+
+Nexus/Pocket 分別使用 4391/4392，手機示意密碼同上。執行 `PLAYWRIGHT=<playwright/index.mjs> node tools/screenshots/capture-heat-stream.mjs <輸出目錄>`。工具使用 Chrome，驗證兩版正常推播與斷線清圖，另驗證兩版歷史回應逆序、桌面回放板塊點選與手機研究範圍標籤；示意名單為 43 檔，200 檔邊界由 API 自動測試覆蓋。
+
+## main 功能保留檢查
+
+`check-main-preservation.mjs` 使用同一份獨立示意資料與 4391 測試站。將測試設定啟用 `finmind`、關閉 monitor／autoUpdate，並使用 `FINMIND_API_TOKEN=offline-demo DEMO_TIME=2026-10-16T19:00:00+08:00` 及上述離線模組啟動；不使用真實金鑰。執行 `PLAYWRIGHT=<playwright/index.mjs> node tools/screenshots/check-main-preservation.mjs`，驗證權證快取與 API、分點舊日期、儲存設定不跳日及其他日期選擇。只會寫入示意目錄的門檻設定。

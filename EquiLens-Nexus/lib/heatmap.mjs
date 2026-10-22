@@ -153,3 +153,15 @@ export function buildLiveHeatmap(snapshot, { universe = [], today = marketToday(
   result.refreshMs = refreshMs;
   return result;
 }
+// Shioaji 熱浪只讀既有訂閱快取，不新增訂閱、不查快照，也不寫盤後紀錄。
+export function buildStreamHeatmap(rows, { subscribedIds = new Set(), connected = false, subscribedCount = 0, error = false, alive = 0, now = Date.now(), enabled = true, open = true, ...options } = {}) {
+  const market = options.market || activeMarket(), date = options.today || marketToday();
+  const universe = (options.universe || []).filter(s => subscribedIds.has(s.id) && market.symbolRe.test(s.id));
+  const ids = new Set(universe.map(s => s.id));
+  const valid = rows.filter(r => ids.has(r.stock_id) && String(r.date).slice(0,10) === date && num(r.close) > 0 && num(r.total_amount) > 0);
+  const heat = valid.length ? buildLiveHeatmap(valid, { ...options, universe, today: date, market }) : null;
+  const subscribed = Math.max(0, Math.min(subscribedIds.size, Number(subscribedCount) || 0));
+  const status = !enabled ? 'paused' : !open ? 'closed' : !connected ? 'disconnected' : !alive || now - alive >= 75000 ? 'stale' : !heat ? 'waiting' : error || subscribed < subscribedIds.size ? 'partial' : 'live';
+  const feed = { source: 'shioaji', scope: 'research', status, subscribed, symbols: subscribedIds.size, quoted: heat?.total.count || 0, asOf: heat?.asOf || null };
+  return { live: open, data: ['live', 'partial'].includes(status) ? { ...heat, source: 'shioaji', scope: 'research', sources: [{ title: 'Shioaji', url: '' }] } : null, feed, refreshMs: LIVE_REFRESH_MS };
+}

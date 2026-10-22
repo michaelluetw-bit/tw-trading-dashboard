@@ -158,3 +158,26 @@ test('stream: an unsubscribe reply only removes the ids we cancelled, even if it
   ws.emit('message', { event: 'unsubscribed', data: [{ id: 'x1', channel: 'books', symbol: '3406' }, { id: 'x2', channel: 'books', symbol: '1569' }, { id: 'trades2330', channel: 'trades', symbol: '2330' }, { id: 'books2317', channel: 'books', symbol: '2317' }] });
   assert.deepEqual([last().subscribed, last().expected, last().extraSubscribed, last().extraExpected], [4, 4, 1, 1], 'main stays complete; only 3406 removed');
 });
+
+test('stream: a connection that fails before opening (error without close) is retried with backoff', () => {
+  const { clock, socks, last } = setup();
+  socks[0].emit('error');
+  assert.equal(last().connected, false);
+  clock.advance(5000);
+  assert.equal(socks.length, 2, 'retried after the first backoff');
+  socks[1].emit('error');
+  socks[1].emit('close'); // a late close for the same socket must not schedule a second retry
+  clock.advance(10000);
+  assert.equal(socks.length, 3, 'one retry per failure, backoff doubled');
+});
+
+test('stream: resubscription immediately marks disconnected while new authentication is pending',()=>{
+ const {stream,clock,socks,login,last}=setup();login(socks[0]);clock.advance(1000);
+ stream.update(['2330']);assert.equal(last().connected,false);assert.equal(last().subscribed,0);
+ clock.advance(1000);assert.equal(last().connected,false,'unauthenticated replacement cannot inherit old heartbeat');
+});
+test('stream: reconnect discards old pending events before a new authenticated session flushes',()=>{
+ const {stream,clock,socks,login,rows}=setup();login(socks[0]);socks[0].emit('message',agg('2330',1460));
+ stream.update(['2330']);clock.advance(0);login(socks[1]);clock.advance(1000);
+ assert.equal(rows.length,0,'no new quote was received');socks[1].emit('message',agg('2330',1500));clock.advance(1000);assert.equal(rows[0][0].row.close,1500);
+});

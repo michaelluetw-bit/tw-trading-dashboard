@@ -1,0 +1,50 @@
+# 永豐金 Shioaji 即時行情（行情轉接）
+
+用永豐金證券 Shioaji API 的即時訂閱，提供盤中雷達、研究範圍熱浪圖與自訂提醒的即時推播。衡析不直接登入永豐金：另一個程式「行情轉接服務」（`sj-quote-bridge`，在 sj-trading 專案中）在同一台電腦上登入永豐金、訂閱行情，再用 WebSocket 轉給衡析。
+
+## 在哪裡
+
+- 「資料與設定 → 資料來源」的「永豐金 Shioaji（行情轉接）」。
+- 啟用後，頁面上的資料來源清單會列出 `Shioaji`。
+
+## 怎麼用
+
+1. 在永豐金 e-Leader「API 金鑰管理」申請一組**只有「行情／資料」和「正式環境」權限**的金鑰，不勾「交易」與「帳務」。
+2. 在 sj-trading 執行 `scripts/setup_quote_keychain.sh`：把這組金鑰存進 macOS 鑰匙圈，並產生本機通行碼。
+3. 在 sj-trading 執行 `uv run sj-quote-bridge`，看到 `bridge=READY` 表示已就緒。
+4. 用 `security find-generic-password -s sj-trading-bridge-token -w | pbcopy` 複製通行碼，貼到衡析的「永豐金 Shioaji（行情轉接）」，按「驗證並儲存」。
+5. 有富果金鑰時，可在「資料與設定 → 資料來源 → 進階」把「盤中即時推播」指定為 Shioaji。
+
+## 運作方式
+
+| 項目 | 內容 |
+|---|---|
+| 連線 | 衡析連到 `ws://127.0.0.1:4350`，先送通行碼再訂閱 |
+| 訂閱 | 每檔 1 個 Quote 訂閱（成交、累計量額、內外盤量、五檔），自選優先，再排研究名單 |
+| 上限 | 200 檔（永豐金的訂閱上限）；超過的股票仍用盤中快照 |
+| 模式 | 只有精簡模式（聚合行情）；沒有逐筆成交與 1 分 K 推播 |
+| 斷線 | 永豐金連線中斷時，轉接服務關閉衡析的連線；衡析顯示斷線，清除尚未送出的舊報價，並在 5–60 秒的間隔內自動重連 |
+
+## 資料來源與請求量
+
+- 即時訂閱的推播不計入永豐金的每日流量。
+- 不提供日 K、分 K、快照與補資料。盤中熱浪圖沿用既有訂閱（最多 200 檔），顯示研究範圍與斷線狀態；盤後熱浪、時光機、日資料更新照舊由其他來源提供。
+- 盤中不會輪詢永豐金的 `snapshots`、`ticks`、`kbars`（永豐金禁止這種用法）。
+
+## 注意事項
+
+- 轉接服務只用行情專用金鑰，不啟用憑證（CA），不訂閱委託回報，也沒有任何下單或帳務功能。
+- [當沖監控](../DAYTRADE.zh-TW.md)用 Shioaji 時只有精簡模式，而且沒有 30 日多週期歷史，所以不會發出做多確認。
+- [五檔錄製器](book-recorder.md)只錄推播清單（聚合行情裡的五檔），不加錄其他股票。
+- 個股視窗的五檔與成交明細只有訂閱中的股票才有即時資料。
+- 衡析與轉接服務必須在同一台電腦上執行。
+
+## 相關檔案
+
+- `EquiLens-Nexus/lib/providers/shioaji.mjs`：資料源與訊息轉換。
+- `EquiLens-Nexus/lib/stream.mjs`：`planStream`（訂閱規劃）與 WebSocket 用戶端。
+- `EquiLens-Nexus/tests/shioaji.test.mjs`、`tests/shioaji-quote-fixture.json`：測試與共用樣本（與 sj-trading 的 `tests/fixtures/quote_stk_expected.json` 相同）。
+
+## 本次 main 整合範圍
+
+只移入 Shioaji provider、必要重連修正與研究範圍熱浪。即時看板及族群排名仍沿用 main 的資料來源；未移入其他分支的看板推播、族群推播排名、歷史補資料、法人 fallback 或 FinMind 權限改寫。main 的權證及分點日期功能保留。
