@@ -84,7 +84,7 @@ Australia, Singapore, India.**
 | [TWSE / TPEx open data](https://openapi.twse.com.tw) | TW | none | stock list, trading calendar, daily bars, whole-market daily data, institutional flows (whole market by day), P/E, monthly revenue |
 | [FinMind](https://finmindtrade.com) | TW | Free / Backer / Sponsor / unknown | Raw stock prices at Free; adjusted and whole-market daily prices at Backer; minute bars and snapshots at Sponsor. Paid entitlements require verified evidence; undocumented chip entitlements remain disabled. |
 | [Fugle](https://developer.fugle.tw) | TW | free / paid | daily (adjusted) and minute bars; WebSocket live stream for the intraday radar and day-trade monitoring (subscriptions: Basic 5, Developer 300, Advanced 2,000 — full mode uses trades + 1-minute bars + order book, 3 per stock; otherwise aggregates, 1 per stock); paid plans add a whole-market live snapshot |
-| [SinoPac Shioaji](docs/features/shioaji-bridge.md) (quote bridge) | TW | local bridge token (quote-only SinoPac key) | live stream for the intraday radar, live board and custom alerts through the local `sj-quote-bridge` (aggregates only, up to 200 stocks); cannot place orders |
+| [SinoPac Shioaji](docs/features/shioaji-bridge.md) (quote bridge) | TW | local bridge token (quote-only SinoPac key) | live stream for the intraday radar, live board, research-scope heatmap and custom alerts through the local `sj-quote-bridge` (aggregates only, up to 200 stocks); cannot place orders |
 | [Twelve Data](https://twelvedata.com) | all 12 markets | free / paid | stock list, daily bars, live quotes, minute bars |
 | [Alpha Vantage](https://www.alphavantage.co) | US, GB, CA, DE, IN | free / premium | daily bars, quotes, news sentiment, P/E, quarterly revenue |
 
@@ -92,8 +92,7 @@ Enable several sources and EquiLens picks a source per capability (in your order
 *Data & Settings → Data sources → Advanced*). Features a source can't support are hidden or fall back to your
 research list's local data — the settings page shows exactly which features are available.
 
-A live-stream source (Fugle, or SinoPac Shioaji through the local quote bridge) only drives the intraday radar, live board and day-trade monitoring; the heatmap, time machine, research
-updates and everything else keep using the snapshot and daily sources. Stocks beyond the stream plan's limit stay on
+A live-stream source drives the intraday radar, live board and day-trade monitoring. With Shioaji selected, the intraday heatmap reuses existing subscriptions (up to 200 stocks) and labels research scope, confirmed/planned subscriptions, quote coverage, quote time and connection status. It adds no subscriptions or upstream snapshot calls. Whole-market closing data, historical queries and snapshot-based time-machine recording remain unchanged. Stocks beyond the stream plan's limit stay on
 snapshots, and without a stream key nothing changes.
 
 Free plans have tight quotas. EquiLens rate-limits every source, resumes interrupted updates and never assumes a higher

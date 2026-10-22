@@ -1,3 +1,4 @@
+import { heatFeedNotice, currentHeatResponse } from './heat-feed.js';
 import { renderHistory } from './history-ui.js';
 import { aggregate, renderTreemap, heatColor } from './heatmap.js';
 import { renderFlowCards, downloadFlowCard } from './flow-cards.js';
@@ -336,38 +337,42 @@ document.addEventListener('touchend', e => { if (touchY != null && e.changedTouc
 window.addEventListener('popstate', e => { if ($('#sheet')?.classList.contains('open')) { closeSheet(true); return; } const t = (location.hash || '#brief').slice(1); if (t !== S.tab) setTab(t, false); });
 
 /* ---------- heat ---------- */
+let heatRequest = 0;
 async function loadHeat(date, query = false) {
-  const H = S.heat; H.loading = true; H.error = ''; if (S.tab === 'heat') draw();
+  const request = ++heatRequest; S.heat.feed = null;
+  const H = S.heat; H.loading = request; H.error = ''; if (S.tab === 'heat') draw();
   try {
     const r = query ? await api('api/heatmap/query', { date }) : await api('api/heatmap?date=' + encodeURIComponent(date || 'latest'));
+    if (request !== heatRequest) return;
     H.dates = r.dates || H.dates; if (r.data) { H.data = r.data; H.agg = null; } else if (date && !query) H.error = '此日沒有紀錄，請按「查詢」。';
-  } catch (e) { if (!e.silent) H.error = e.message; }
-  finally { H.loading = false; }
-  if (!query && !H.tried) { H.tried = true; const want = defaultHeatDate(); if (!H.data || H.data.date < want && !H.dates.includes(want)) { const had = !!H.data; await loadHeat(want, true); if (H.error && had) H.error = `最新交易日尚未取得（${H.error}），目前顯示 ${H.data.date}。`; } }
+  } catch (e) { if (request === heatRequest && !e.silent) H.error = e.message; }
+  finally { if (H.loading === request) H.loading = false; }
+  if (request === heatRequest && !date && !query && !H.tried) { H.tried = true; const want = defaultHeatDate(); if (!H.data || H.data.date < want && !H.dates.includes(want)) { const had = !!H.data; await loadHeat(want, true); if (H.error && had) H.error = `最新交易日尚未取得（${H.error}），目前顯示 ${H.data.date}。`; } }
 }
 // 盤中定時向 Nexus 取即時熱浪圖；Nexus 端共用同一份快照。
 function liveOpen() {
   return MK.isOpen();
 }
 async function loadLive() {
-  const H = S.heat; if (H.liveBusy || H.loading) return;
-  H.liveBusy = true;
-  try { const r = await api('api/heatmap/live'); if (r.data) { H.data = r.data; H.agg = null; H.error = ''; if (H.focus && !r.data.sectors.some(s => s.name === H.focus)) H.focus = null; } }
-  catch (e) { if (!e.silent) { H.error = `盤中即時更新失敗：${e.message}`; if (/權限不足|額度/.test(e.message)) { H.live = false; H.error += '；已暫停自動更新。'; } } }
-  finally { H.liveBusy = false; if (S.tab === 'heat' && !$('#sheet')?.classList.contains('open')) draw(); }
+  const H = S.heat; if (H.liveBusy || H.loading || !H.live) return;
+  const request = ++heatRequest;
+  H.liveBusy = request;
+  try { const r = currentHeatResponse(await api('api/heatmap/live'), twToday()); if (request !== heatRequest || !H.live || replayActive()) return; H.feed = r.feed || null; if (r.feed && !r.data) { H.data = null; H.agg = null; H.error = ''; } if (r.data) { H.data = r.data; H.agg = null; H.error = ''; if (H.focus && !r.data.sectors.some(s => s.name === H.focus)) H.focus = null; } }
+  catch (e) { if (request !== heatRequest || !H.live || replayActive()) return; if (H.feed) { H.feed = { ...H.feed, status: 'error' }; H.data = null; H.agg = null; } if (!e.silent) { H.error = `盤中即時更新失敗：${e.message}`; if (/權限不足|額度/.test(e.message)) { H.live = false; H.error += '；已暫停自動更新。'; } } }
+  finally { if (H.liveBusy === request) H.liveBusy = false; if (S.tab === 'heat' && !$('#sheet')?.classList.contains('open')) draw(); }
 }
-setInterval(() => { if (S.tab === 'heat' && S.heat.live && liveOpen() && !document.hidden && !replayActive()) loadLive(); }, 10000);
+setInterval(() => { if (S.tab === 'heat' && S.heat.live && (liveOpen() || S.heat.feed) && !document.hidden && !replayActive()) loadLive(); }, 10000);
 function heatAgg() { const H = S.heat; if (!H.data) return null; if (!H.agg || H.aggMarket !== H.market) { H.agg = aggregate(H.data, H.market); H.aggMarket = H.market; } return H.agg; }
 function heatPage() {
   const H = S.heat, a = heatAgg(), d = H.data;
   const date = d?.date || defaultHeatDate(), open = liveOpen();
   const ctl = `<div class="toolbar"><div class="field"><input type="date" id="heat-date" value="${date}" max="${twToday()}" min="2015-01-05" aria-label="交易日期" style="flex:1"><button class="btn primary" data-heat-query ${H.loading ? 'disabled' : ''}>${H.loading ? '<span class="spinner"></span>' : '查詢'}</button><button class="btn${H.live && open ? ' primary' : ''}" data-hlive aria-pressed="${H.live}">${H.liveBusy ? '<span class="spinner"></span>' : H.live && open ? '●' : '○'} 即時${H.live ? (open ? ' 10 秒' : '') : ' 暫停'}</button><button class="btn" data-replay-open aria-label="時光機">⏱</button></div>
     <div class="seg">${['全部', '上市', '上櫃'].map(m => `<button class="${H.market === m ? 'on' : ''}" data-hmarket="${m}">${m}</button>`).join('')}</div></div>`;
-  if (!d) return ctl + (H.error ? `<div class="notice err">${esc(H.error)}</div>` : '') + (H.loading ? `<div class="empty"><span class="spinner"></span> 正在讀取全市場成交資料…</div>` : '<div class="empty">尚無資料，請選擇日期後按「查詢」。</div>');
+  if (!d) return ctl + heatFeedNotice(H.feed) + (H.error ? `<div class="notice err">${esc(H.error)}</div>` : '') + (H.loading ? `<div class="empty"><span class="spinner"></span> 正在讀取全市場成交資料…</div>` : '<div class="empty">尚無資料，請選擇日期後按「查詢」。</div>');
   const t = a.total, focus = H.focus && a.sectors.find(s => s.name === H.focus), sel = H.sel && a.byId.get(H.sel);
-  return `${ctl}${H.error ? `<div class="notice warn">${esc(H.error)}</div>` : ''}
+  return `${ctl}${heatFeedNotice(H.feed)}${H.error ? `<div class="notice warn">${esc(H.error)}</div>` : ''}
     <div class="kpis" style="padding:0;margin-bottom:10px"><div class="kpi"><span>${d.live ? `${open ? '盤中' : '盤中最後'} ${esc((d.asOf || d.retrievedAt).slice(11, 19))} 累計成交` : `${d.date} 成交金額`}</span><b class="num">${yi(t.money)}<small>億</small></b></div><div class="kpi"><span>成交加權漲跌 · 漲停 ${t.limitUp}</span><b class="num ${cls(t.change)}">${pct(t.change)}</b><div class="breadth"><i class="u" style="width:${t.up / (t.count || 1) * 100}%"></i><i class="f" style="width:${t.flat / (t.count || 1) * 100}%"></i><i class="d" style="flex:1"></i></div></div></div>
-    <div class="hm-bar">${focus ? `<button class="btn" data-hback style="min-height:36px;padding:0 12px">‹ 全市場</button>` : ''}<span class="crumb">${focus ? `${esc(focus.name)} <span class="${cls(focus.change)} num">${pct(focus.change)}</span> <small class="soft">${yi(focus.money)} 億 · ${focus.count} 檔</small>` : `${a.sectors.length} 個板塊 <small class="soft">· 點板塊標題放大</small>`}</span></div>
+    <div class="hm-bar">${focus ? `<button class="btn" data-hback style="min-height:36px;padding:0 12px">${d.scope === 'research' ? '‹ 研究範圍' : '‹ 全市場'}</button>` : ''}<span class="crumb">${focus ? `${esc(focus.name)} <span class="${cls(focus.change)} num">${pct(focus.change)}</span> <small class="soft">${yi(focus.money)} 億 · ${focus.count} 檔</small>` : `${a.sectors.length} 個板塊 <small class="soft">· 點板塊標題放大</small>`}</span></div>
     <div class="hm-wrap"><div id="hm" role="img" aria-label="資金板塊熱浪圖"></div></div>
     <div class="hm-legend">${[-7, -5, -3, -1, 0, 1, 3, 5, 7].map(v => `<span style="background:${heatColor(v)}">${v > 0 ? '+' : ''}${v}</span>`).join('')}</div>
     ${sel ? `<div class="hm-pick"><span class="nm">${esc(sel.name)}<small>${sel.id} · ${esc(sel.market)}</small></span><span class="num ${cls(sel.change)}" style="font-weight:800;font-size:1.1rem;text-align:right">${fmt(sel.close, 2)}<br><small>${pct(sel.change)}</small></span><span class="sub">${esc(sel.sector)} · 成交 ${yi(sel.money)} 億${sel.prevMoney ? ` · 量能 ${pct((sel.money / sel.prevMoney - 1) * 100, 0)}` : ''}</span><span></span><div class="acts"><button class="btn" data-hclose aria-label="關閉" style="flex:0 0 44px;padding:0">✕</button><button class="btn primary" data-stock="${sel.id}">走勢／五檔</button>${inScope(sel.id) ? `<button class="btn" data-stock-detail="${sel.id}">個股診斷</button>` : ''}<button class="btn" data-hsec="${esc(sel.sector)}">放大 ${esc(sel.sector)}</button></div></div>` : ''}
@@ -519,7 +524,7 @@ document.addEventListener('click', async e => {
     if (ds.news) return startJob('api/news', { id: ds.news }, `取得 ${ds.news} 新聞`);
     if ('patUpdate' in ds) { if (!confirm(tx('更新全市場型態資料？約需數分鐘並使用資料源額度，可隨時按「停止」。'))) return; return startJob('api/pattern-update', {}, '更新型態資料'); }
     if ('jobCancel' in ds) { await api('api/cancel', {}); toast('已要求停止，資料會保留'); return pollJob(); }
-    if ('hlive' in ds) { const H = S.heat; H.live = !H.live; H.error = ''; draw(); if (H.live && liveOpen()) await loadLive(); else if (H.live) toast('非盤中；開盤後每 10 秒自動更新'); return; }
+    if ('hlive' in ds) { ++heatRequest; const H = S.heat; H.loading = false; H.liveBusy = false; H.live = !H.live; if (H.feed) H.feed = { ...H.feed, status: H.live ? 'waiting' : 'display-paused' }; H.error = ''; draw(); if (H.live && liveOpen()) await loadLive(); else if (H.live) toast('非盤中；開盤後每 10 秒自動更新'); return; }
     if ('heatQuery' in ds) { S.heat.live = false; const d = $('#heat-date').value || defaultHeatDate(); await loadHeat(d, true); if (!S.heat.error) toast(`已更新 ${S.heat.data.date} 熱浪圖（即時已暫停）`); return draw(); }
     if ('hback' in ds) { S.heat.focus = null; return draw(); }
     if ('hclose' in ds) { S.heat.sel = null; return draw(); }

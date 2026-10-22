@@ -170,3 +170,14 @@ test('stream: a connection that fails before opening (error without close) is re
   clock.advance(10000);
   assert.equal(socks.length, 3, 'one retry per failure, backoff doubled');
 });
+
+test('stream: resubscription immediately marks disconnected while new authentication is pending',()=>{
+ const {stream,clock,socks,login,last}=setup();login(socks[0]);clock.advance(1000);
+ stream.update(['2330']);assert.equal(last().connected,false);assert.equal(last().subscribed,0);
+ clock.advance(1000);assert.equal(last().connected,false,'unauthenticated replacement cannot inherit old heartbeat');
+});
+test('stream: reconnect discards old pending events before a new authenticated session flushes',()=>{
+ const {stream,clock,socks,login,rows}=setup();login(socks[0]);socks[0].emit('message',agg('2330',1460));
+ stream.update(['2330']);clock.advance(0);login(socks[1]);clock.advance(1000);
+ assert.equal(rows.length,0,'no new quote was received');socks[1].emit('message',agg('2330',1500));clock.advance(1000);assert.equal(rows[0][0].row.close,1500);
+});

@@ -20,7 +20,7 @@ export function createStream({ spec, key, market, symbols = [], channels = ['agg
   const subscribe = (sock, symbols, chs) => { const n = spec.batch || 50; for (const ch of chs) for (let i = 0; i < symbols.length; i += n) sock.send(JSON.stringify(spec.subscribe(symbols.slice(i, i + n), ch))); };
   const flushTimer = timers.setInterval(() => {
     if (list.length || keyed.size) { const events = [...list, ...keyed.values()]; list = []; keyed = new Map(); try { onEvents(events); } catch { } }
-    if (ws && authed) { if (now() - lastMsg > QUIET_MS) { status({ connected: false, error: 'no-heartbeat' }); reopen(0); } else status({ connected: true, alive: lastMsg }); }
+    if (ws && authed) { if (now() - lastMsg > QUIET_MS) { reopen(0, { error: 'no-heartbeat' }); } else status({ connected: true, alive: lastMsg }); }
   }, flushMs);
   flushTimer?.unref?.();
 
@@ -28,7 +28,7 @@ export function createStream({ spec, key, market, symbols = [], channels = ['agg
     if (closed || !want.length) return;
     authed = false; subscribed = 0; extraSubscribed = 0; subIds = new Map(); pendingUnsub = new Map(); lastMsg = now();
     let sock;
-    try { sock = connect(spec.url); } catch (e) { status({ connected: false, error: e.message }); return reopen(); }
+    try { sock = connect(spec.url); } catch (e) { return reopen(undefined, { error: e.message }); }
     ws = sock;
     sock.addEventListener('open', () => { if (ws === sock) sock.send(JSON.stringify(spec.auth(key))); });
     sock.addEventListener('message', ev => {
@@ -61,21 +61,25 @@ export function createStream({ spec, key, market, symbols = [], channels = ['agg
       }
       if (msg.event === 'error') {
         const text = String(msg.data?.message || msg.message || 'error');
-        if (!authed) { status({ connected: false, error: text, authFailed: true }); return reopen(AUTH_RETRY_MS); }
+        if (!authed) { return reopen(AUTH_RETRY_MS, { error: text, authFailed: true }); }
         return status({ connected: true, error: text });
       }
       const e = spec.parse(msg, market);
       if (e) { if (onEvent) try { onEvent(e); } catch { } if (e.key) keyed.set(e.key, e); else list.push(e); }
     });
-    const lost = () => { if (ws === sock) { ws = null; status({ connected: false }); reopen(); } };
+    const lost = () => { if (ws === sock) { ws = null; reopen(); } };
     sock.addEventListener('close', lost);
     // 連線建立前失敗時（例如對方尚未啟動），Node 的 WebSocket 可能只發出 error、不發 close：同樣安排重連；之後若再收到 close 不會重複
     sock.addEventListener('error', lost);
   }
-  function drop() { if (ws) { const s = ws; ws = null; try { s.close(); } catch { } } }
-  function reopen(delay = backoff) {
+  function drop() {
+    // A buffered event belongs to its socket, never to a later authenticated session.
+    list = []; keyed.clear(); authed = false; lastMsg = 0; subscribed = 0; extraSubscribed = 0;
+    if (ws) { const s = ws; ws = null; try { s.close(); } catch { } } }
+  function reopen(delay = backoff, reason = {}) {
     if (closed) return;
     drop();
+    status({ connected: false, alive: 0, ...reason });
     timers.clearTimeout(retryTimer);
     retryTimer = timers.setTimeout(open, delay);
     retryTimer?.unref?.();

@@ -80,11 +80,10 @@ one `subscribed` entry per accepted symbol (rejected symbols come back as `error
 closes the WebSocket and refuses new handshakes (HTTP 503) until it recovers, so the client reports the outage and
 reconnects with its normal backoff. See [features/shioaji-bridge.md](features/shioaji-bridge.md).
 
-`stream` (Fugle WebSocket or the Shioaji bridge) only drives the intraday radar and live board. During the session `server.mjs` opens it for
+`stream` (Fugle WebSocket or the Shioaji bridge) drives the intraday radar and live board. During the session `server.mjs` opens it for
 the watchlist first, then the research list, up to `stream.limit` for the verified plan, and refreshes the list when it
 changes. Stream rows use the live-snapshot format plus `volume_at_bid` / `volume_at_ask`; the radar takes stream rows
-for subscribed stocks and snapshot rows for the rest, and quotes use whichever row is newer. The heatmap and time machine
-keep using snapshots. The key is sent only in the auth message, never in the URL.
+for subscribed stocks and snapshot rows for the rest, and quotes use whichever row is newer. The Shioaji heatmap reads the existing stream cache and subscription set via `buildStreamHeatmap`; it returns research scope, quote time and feed status. Unhealthy connections and empty current-day quotes return no chart. Reopening a stream immediately reports disconnection and clears buffered events. The heatmap distinguishes confirmed subscriptions from the planned scope; client request generations prevent late history/live responses from changing a newer selection, and delayed prior-day live payloads are discarded. Other heatmap sources and time-machine recording keep using snapshots. The key is sent only in the auth message, never in the URL.
 
 Day-trade monitoring (Taiwan): with day-trade monitoring on and enough subscriptions (e.g. Fugle Advanced), the stream
 runs in full mode — trades, 1-minute bars and order book per stock, split over two connections by sorted symbol — and

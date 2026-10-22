@@ -24,3 +24,9 @@ PNG 轉成 WebP（品質 82）後放進 `docs/images/`；手機版六張合成�
 ## 補充歷史行情截圖
 
 使用獨立示意資料目錄執行 `EQUITY_DATA_DIR=<示意目錄> node tools/screenshots/demo-history.mjs`，再沿用上面的離線 clock 啟動 Nexus/Pocket（4391/4392）。手機示意密碼為 `demo-password-123`。執行 `PLAYWRIGHT=<playwright/index.mjs> node tools/screenshots/capture-history.mjs <輸出目錄>`；若使用已安裝的 Chrome，可加 `PLAYWRIGHT_CHANNEL=chrome`。此流程驗證興櫃開盤欄、前身原代號與登入後的手機顯示。
+
+## Shioaji 研究範圍熱浪截圖
+
+沿用上述示意資料目錄，將資料源設為 `shioaji`、關閉每日更新並啟用盤中監控。只在此獨立測試環境使用 `DEMO_TIME=2026-10-22T10:00:00+08:00 SHIOAJI_BRIDGE_TOKEN=offline-test node --import ./tests/helpers/heat-stream-offline.mjs server.mjs`。測試模組會取代 WebSocket 並阻擋對外 HTTP，使用合成報價，絕不連接券商。不要在正式啟動命令載入此模組。
+
+Nexus/Pocket 分別使用 4391/4392，手機示意密碼同上。執行 `PLAYWRIGHT=<playwright/index.mjs> node tools/screenshots/capture-heat-stream.mjs <輸出目錄>`。工具使用 Chrome，驗證兩版正常推播與斷線清圖，另驗證兩版歷史回應逆序、桌面回放板塊點選與手機研究範圍標籤；示意名單為 43 檔，200 檔邊界由 API 自動測試覆蓋。

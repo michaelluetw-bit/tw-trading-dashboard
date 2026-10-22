@@ -1,6 +1,7 @@
 // 資金板塊熱浪圖（Squarified Treemap）
 // 面積 = 成交金額；顏色 = 漲跌幅（依市場慣例或設定：紅漲綠跌／綠漲紅跌）；板塊依產業別（沒有產業資料時依研究族群）。
 import { rotationData, rotationSVG, replayStocks } from './insight-ui.js';
+import { heatFeedNotice, currentHeatResponse } from './heat-feed.js';
 import * as MK from './market.js';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = (v, n = 0) => v == null || !Number.isFinite(Number(v)) ? '—' : Number(v).toLocaleString('en-US', { maximumFractionDigits: n, minimumFractionDigits: n });
@@ -16,13 +17,14 @@ const minusDays = (d, n) => new Date(Date.parse(d) - n * 86400000).toISOString()
 const H = { data: null, dates: [], market: '全部', focus: null, search: '', selected: null, loading: false, error: '', date: '', fullscreen: false, autoTried: false, loaded: false, live: true, liveBusy: false };
 let ctx = null, observer = null, lastAgg = null;
 const LIVE_MS = 10000;
+let heatRequest = 0;
 // 盤中：平日開盤到收盤後數分鐘（與 Nexus 伺服器 liveWindow 相同）。
 export function liveOpen(now = new Date()) {
   return MK.isOpen(now.getTime());
 }
 
 export function initHeatmap(context) { ctx = context; }
-export function heatBusy() { return H.loading; }
+export function heatBusy() { return !!H.loading; }
 export function defaultHeatDate() {
   let d = MK.parts().mod >= MK.market().close + 90 ? twToday() : minusDays(twToday(), 1);
   while ([0, 6].includes(new Date(d + 'T12:00:00Z').getUTCDay())) d = minusDays(d, 1);
@@ -87,41 +89,50 @@ function aggregate(data, market) {
 
 /* ---------- data ---------- */
 export async function loadHeatmap({ date = null, query = false, auto = false } = {}) {
-  if (H.loading) return;
-  H.loading = true; H.error = ''; H.warn = false; ctx.redraw();
+  const request = ++heatRequest; H.feed = null;
+  H.loading = request; H.error = ''; H.warn = false; ctx.redraw();
   try {
     const r = query ? await ctx.api('heatmap/query', { date: date || H.date || defaultHeatDate() }) : await ctx.api('heatmap?date=' + encodeURIComponent(date || 'latest'));
+    if (request !== heatRequest) return;
     H.dates = r.dates || H.dates;
     if (r.data) { H.data = r.data; H.date = r.data.date; H.focus = H.focus && r.data.sectors.some(s => s.name === H.focus) ? H.focus : null; }
     else if (!query && date) H.error = '此日沒有本機紀錄，請按「查詢 FinMind」。';
     H.loaded = true;
-  } catch (e) { H.error = auto && H.data ? `自動查詢最新交易日未成功（${e.message}）；目前顯示本機紀錄 ${H.data.date}。` : e.message; H.warn = auto && !!H.data; }
-  finally { H.loading = false; ctx.redraw(); }
+  } catch (e) { if (request !== heatRequest) return; H.error = auto && H.data ? `自動查詢最新交易日未成功（${e.message}）；目前顯示本機紀錄 ${H.data.date}。` : e.message; H.warn = auto && !!H.data; }
+  finally { if (H.loading === request) H.loading = false; ctx.redraw(); }
   // 第一次開啟：本機紀錄落後預設交易日時，自動向 FinMind 查詢一次（3 次 API 請求）。
-  if (!query && !H.autoTried && ctx.state().tokenConfigured && !ctx.state().job.running) {
+  if (request === heatRequest && !date && !query && !H.autoTried && ctx.state().tokenConfigured && !ctx.state().job.running) {
     H.autoTried = true;
     const want = defaultHeatDate();
     if (!H.data || H.data.date < want && !(H.dates || []).includes(want)) await loadHeatmap({ date: want, query: true, auto: true });
   }
 }
-// 盤中每 10 秒取一次全市場即時快照（1 次 API 請求，由 Nexus 與手機版共用）。
+// 盤中每 10 秒讀取 Nexus 行情；Shioaji 使用既有推播快取，其餘使用快照。
 export async function loadLive() {
-  if (H.liveBusy || H.loading || !ctx.state().tokenConfigured) return;
-  H.liveBusy = true;
+  if (H.liveBusy || H.loading || !H.live || !(ctx.state().capabilities?.snapshot || ctx.state().capabilities?.stream === 'shioaji')) return;
+  const request = ++heatRequest;
+  H.liveBusy = request; H.loaded = true;
   try {
-    const r = await ctx.api('heatmap/live');
+    const r = currentHeatResponse(await ctx.api('heatmap/live'), twToday());
+    if (request !== heatRequest || !H.live || H.replay) return;
+    H.feed = r.feed || null;
+    if (r.feed && !r.data) { H.data = null; H.focus = null; H.error = ''; H.warn = false; }
     if (r.data) { H.data = r.data; H.date = r.data.date; H.focus = H.focus && r.data.sectors.some(s => s.name === H.focus) ? H.focus : null; H.error = ''; H.warn = false; }
   } catch (e) {
+    if (request !== heatRequest || !H.live || H.replay) return;
+    if (ctx.state().capabilities?.stream === 'shioaji') { H.feed = { ...H.feed, status: 'error' }; H.data = null; }
     H.error = `盤中即時更新失敗：${e.message}`; H.warn = !!H.data;
     if (/權限不足|額度/.test(e.message)) { H.live = false; H.error += '；已暫停自動更新。'; }
-  } finally { H.liveBusy = false; ctx.redraw(); }
+  } finally { if (H.liveBusy === request) H.liveBusy = false; ctx.redraw(); }
 }
-setInterval(() => { if (ctx && H.live && H.loaded && !H.replay && liveOpen() && !document.hidden && document.getElementById('heatmap')) loadLive(); }, LIVE_MS);
+setInterval(() => { if (ctx && H.live && H.loaded && !H.replay && (liveOpen() || H.feed) && !document.hidden && document.getElementById('heatmap')) loadLive(); }, LIVE_MS);
 
 /* ---------- 時光機：回放當日每分鐘畫格 ---------- */
 async function openReplay(date) {
-  const { days } = await ctx.api('replay/days'); if (!days.length) throw new Error('還沒有時光機紀錄。盤中監控開啟後，每分鐘會自動錄製一個畫格。');
+  const request = ++heatRequest; H.feed = null; H.live = false; H.loading = false; H.liveBusy = false;
+  const { days } = await ctx.api('replay/days'); if (request !== heatRequest) return; if (!days.length) throw new Error('還沒有時光機紀錄。盤中監控開啟後，每分鐘會自動錄製一個畫格。');
   const d = date || days.at(-1), sum = await ctx.api('replay?date=' + d);
+  if (request !== heatRequest) return;
   stopPlay(); H.live = false; H.focus = null;
   H.replay = { days, date: d, sum, rot: rotationData(sum), i: sum.times.length - 1, frame: null, playing: false, speed: 1, cache: new Map() };
   await showFrame(H.replay.i);
@@ -153,7 +164,7 @@ document.addEventListener('click', async e => {
   const b = e.target.closest('[data-rp],[data-rpspeed]'); if (!b || !ctx || !H.replay) return;
   if (b.dataset.rpspeed) { H.replay.speed = Number(b.dataset.rpspeed); document.querySelectorAll('[data-rpspeed]').forEach(x => x.classList.toggle('selected', x === b)); return; }
   if (b.dataset.rp === 'play') return H.replay.playing ? (stopPlay(), paint()) : startPlay();
-  if (b.dataset.rp === 'close') { stopPlay(); H.replay = null; H.focus = null; ctx.redraw(); }
+  if (b.dataset.rp === 'close') { ++heatRequest; stopPlay(); H.replay = null; H.focus = null; ctx.redraw(); }
 });
 document.addEventListener('change', async e => { if (e.target.id === 'rp-day' && H.replay) { try { await openReplay(e.target.value); } catch (err) { ctx.toast(err.message); } } });
 let slideTimer;
@@ -171,7 +182,7 @@ export function heatPage() {
   const controls = `<section class="panel heat-controls">
     <label>交易日期 <input id="heat-date" type="date" min="2015-01-05" max="${twToday()}" value="${esc(date)}" ${H.loading ? 'disabled' : ''}></label>
     <button class="primary" data-heat="query" ${H.loading || state.job.running ? 'disabled' : ''}>${H.loading ? '<i class="spinner"></i>讀取中' : '⟳ 查詢 FinMind'}</button>
-    <button data-heat="live" class="${H.live && open ? 'selected' : ''}" aria-pressed="${H.live}" ${state.capabilities?.snapshot ? '' : 'disabled'} title="${MK.market().sessions?.[0]?.[0] || ''}–${MK.market().sessions?.at(-1)?.[1] || ''} 盤中自動更新">${H.liveBusy ? '<i class="spinner"></i>' : H.live && open ? '●' : '○'} 盤中即時${H.live ? (open ? ' · 10 秒' : ' · 未開盤') : ' · 暫停'}</button>
+    <button data-heat="live" class="${H.live && open ? 'selected' : ''}" aria-pressed="${H.live}" ${(state.capabilities?.snapshot || state.capabilities?.stream === 'shioaji') ? '' : 'disabled'} title="${MK.market().sessions?.[0]?.[0] || ''}–${MK.market().sessions?.at(-1)?.[1] || ''} 盤中自動更新">${H.liveBusy ? '<i class="spinner"></i>' : H.live && open ? '●' : '○'} 盤中即時${H.live ? (open ? ' · 10 秒' : ' · 未開盤') : ' · 暫停'}</button>
     <button data-heat="replay" title="回放今日或過去每分鐘的資金流向">⏱ 時光機</button>
     ${H.dates.length ? `<select id="heat-cached" aria-label="本機紀錄"><option value="">本機紀錄 ${H.dates.length} 日</option>${H.dates.slice().reverse().map(x => `<option value="${x}" ${x === d?.date ? 'selected' : ''}>${x}</option>`).join('')}</select>` : ''}
     <div class="segmented" role="group" aria-label="市場">${['全部', ...new Set((H.data?.sectors || []).flatMap(s => s.stocks.map(x => x.market)).filter(Boolean))].map(m => `<button data-heat-market="${m}" class="${H.market === m ? 'selected' : ''}" aria-pressed="${H.market === m}">${m}</button>`).join('')}</div>
@@ -180,10 +191,10 @@ export function heatPage() {
     <button data-heat="export" ${d ? '' : 'disabled'}>↓ 板塊 CSV</button>
   </section>`;
   const err = H.error ? `<div class="notice ${H.warn ? 'warn' : 'err'}" role="alert"><span>${esc(H.error)}</span>${state.tokenConfigured ? '' : '<button data-page="settings">連接 FinMind →</button>'}</div>` : '';
-  const meta = d?.live ? `<div class="notice"><span><b class="mono">${esc(d.date)}</b> ${open ? '盤中即時' : '盤中最後快照'} · 行情時間 <b class="mono">${esc((d.asOf || d.retrievedAt).slice(11, 19))}</b> · 普通股 ${fmt(d.total.count)} 檔 · 成交金額為開盤至今累計${open && H.live ? ` · 每 ${Math.round((d.refreshMs || 10000) / 1000)} 秒自動更新` : ''}</span><span class="tag cyan">面積＝成交金額 · 顏色＝漲跌幅</span></div>`
+  const meta = d?.live ? `<div class="notice"><span><b class="mono">${esc(d.date)}</b> ${!H.live || H.feed && H.feed.status !== 'live' ? '最後收到行情' : open ? '盤中即時' : '盤中最後快照'} · 行情時間 <b class="mono">${esc((d.asOf || d.retrievedAt).slice(11, 19))}</b> · ${d.scope === 'research' ? '研究範圍' : ''}普通股 ${fmt(d.total.count)} 檔 · 成交金額為開盤至今累計${open && H.live ? ` · 每 ${Math.round((d.refreshMs || 10000) / 1000)} 秒自動更新` : ''}</span><span class="tag cyan">面積＝成交金額 · 顏色＝漲跌幅</span></div>`
     : d ? `<div class="notice"><span><b class="mono">${esc(d.date)}</b> 收盤 ·${d.previousDate ? `比較日 <span class="mono">${esc(d.previousDate)}</span> · ` : ''}${d.scope === 'research' ? '研究名單' : ''}普通股 ${fmt(d.total.count)} 檔（已排除 ETF、權證、ETN）· 取得 ${esc(MK.dateTime(d.retrievedAt))}${d.requestedDate && d.requestedDate !== d.date ? ` · 查詢日 ${esc(d.requestedDate)} 非交易日，改用最近交易日` : ''}</span><span class="tag cyan">面積＝成交金額 · 顏色＝漲跌幅</span></div>` : '';
   const kpis = t ? `<section class="stats heat-kpis">
-    <article class="stat"><span class="label">總成交金額 <i>TURNOVER</i></span><div class="value glow">${yi(t.money)}<span class="unit">億</span></div><p>${live ? '開盤至今累計' : `較前一交易日 <span class="${cls(t.moneyChange)} mono">${pct(t.moneyChange, 1)}</span>`}</p></article>
+    <article class="stat"><span class="label">總成交金額 <i>TURNOVER</i></span><div class="value glow">${yi(t.money)}<span class="unit">億</span></div><p>${live ? (d?.scope === 'research' ? '研究範圍開盤至今累計' : '開盤至今累計') : `較前一交易日 <span class="${cls(t.moneyChange)} mono">${pct(t.moneyChange, 1)}</span>`}</p></article>
     <article class="stat"><span class="label" title="各股漲跌幅依成交金額加權平均，不是加權指數（加權指數依市值加權）">成交加權漲跌 <i>W-CHG</i></span><div class="value ${cls(t.change)}">${pct(t.change)}</div><p>各股漲跌幅依成交金額加權平均（不是加權指數）</p></article>
     <article class="stat"><span class="label">漲跌家數 <i>BREADTH</i></span><div class="value"><span class="up">${fmt(t.up)}</span><span class="unit">/</span><span class="down">${fmt(t.down)}</span></div><div class="breadth"><i class="u" style="width:${t.up / (t.count || 1) * 100}%"></i><i class="f" style="width:${t.flat / (t.count || 1) * 100}%"></i><i class="d" style="width:${t.down / (t.count || 1) * 100}%"></i></div></article>
     <article class="stat"><span class="label">漲停／跌停 <i>LIMIT</i></span><div class="value"><span class="up">${fmt(t.limitUp)}</span><span class="unit">/</span><span class="down">${fmt(t.limitDown)}</span></div><p>${Number.isFinite(LIM()) ? `漲跌幅 ≥ ${fmt(LIM(), 1)}% 視為觸及` : '此市場沒有漲跌幅限制'}</p></article>
@@ -192,11 +203,11 @@ export function heatPage() {
   </section>` : '';
   const legend = `<div class="legend" aria-label="顏色圖例">${[-7, -5, -3, -1, 0, 1, 3, 5, 7].map(v => `<span style="background:${heatColor(v)}">${v > 0 ? '+' : ''}${v}</span>`).join('')}</div>`;
   const focus = H.focus && agg?.sectors.find(s => s.name === H.focus);
-  const stage = `<section class="panel heat-stage"><div class="heat-head"><div class="crumbs">${H.focus ? '<button data-heat="back">← 全市場</button>' : ''}<span class="path">MARKET / ${H.market === '全部' ? 'ALL' : esc(H.market)}${focus ? ` / <b>${esc(focus.name)}</b> <span class="${cls(focus.change)}">${pct(focus.change)}</span> · ${yi(focus.money)} 億 · ${focus.count} 檔` : ` · <b>${agg ? agg.sectors.length : 0}</b> 個板塊`}</span></div><div class="actions">${legend}<button class="ghost" data-heat="fullscreen" title="全螢幕（Esc 離開）">⛶</button></div></div>
+  const stage = `<section class="panel heat-stage"><div class="heat-head"><div class="crumbs">${H.focus ? `<button data-heat="back">${d?.scope === 'research' ? '← 研究範圍' : '← 全市場'}</button>` : ''}<span class="path">${d?.scope === 'research' ? 'RESEARCH' : 'MARKET'} / ${H.market === '全部' ? 'ALL' : esc(H.market)}${focus ? ` / <b>${esc(focus.name)}</b> <span class="${cls(focus.change)}">${pct(focus.change)}</span> · ${yi(focus.money)} 億 · ${focus.count} 檔` : ` · <b>${agg ? agg.sectors.length : 0}</b> 個板塊`}</span></div><div class="actions">${legend}<button class="ghost" data-heat="fullscreen" title="全螢幕（Esc 離開）">⛶</button></div></div>
     <div id="heatmap" class="${H.fullscreen ? 'fullscreen' : ''}" role="img" aria-label="資金板塊熱浪圖">${!d ? `<div class="hm-empty">${H.loading ? '<div class="hm-scan"></div><h3>正在掃描全市場成交資料…</h3><p>依序讀取交易日曆、當日與前一交易日行情（3 次 API 請求）</p>' : `<h3>尚無熱浪圖資料</h3><p>選擇交易日期後按「查詢」。收盤資料約於收盤後 1.5 小時公布。</p><div><button class="primary" data-heat="query" ${state.tokenConfigured ? '' : 'disabled'}>⟳ 查詢 FinMind</button></div>`}</div>` : ''}</div></section>`;
   const right = `<aside class="rightcol">${inspector(agg)}<section class="panel"><div class="panelhead"><div><h2><span class="idx">01</span>板塊資金排行</h2><p>依成交金額 · 點擊放大板塊</p></div><span class="tag">${agg ? agg.sectors.length : 0}</span></div><div class="flow-list">${agg ? sectorRows(agg) : '<div class="empty"><p>等待資料</p></div>'}</div></section></aside>`;
   const bottom = agg ? `<div class="heat-bottom"><section class="panel"><div class="panelhead"><div><h2><span class="idx">02</span>板塊資金增減</h2><p>與前一交易日比較（同一批股票）· 單位：億元</p></div></div>${deltaBars(agg)}</section><section class="panel"><div class="panelhead"><div><h2><span class="idx">03</span>資金焦點個股</h2><p>左：成交金額前 10 · 右：成交 ≥ 5 億之漲幅前 10</p></div></div>${movers(agg)}</section></div>` : '';
-  return `${controls}${err}${meta}${kpis}<div class="heat-grid">${stage}${right}</div>${bottom}
+  return `${controls}${err}${heatFeedNotice(H.feed)}${meta}${kpis}<div class="heat-grid">${stage}${right}</div>${bottom}
   <details class="panel contentpad" style="margin-top:16px"><summary>資料口徑與限制</summary><p>資料來源為目前資料源的全市場單日成交與股票清單的產業別；資料源沒有全市場行情時，改用研究名單的本機日成交並以研究族群分組。只納入普通股，排除 ETF、ETN、權證、受益憑證與已下市股票；同名產業（如「其他電子業／其他電子類」）合併為同一板塊。</p><p>漲跌幅 = 漲跌價差 ÷（收盤 − 漲跌價差）；板塊漲跌為成交金額加權平均。「資金增減」只比較兩個交易日都有成交的同一批股票；成交金額高代表交投熱絡，不等於資金淨流入或主力買超。</p><p>收盤行情約於收盤後 1.5 小時公布；查詢非交易日會自動改用最近交易日。本頁為研究資訊，非交易建議。</p></details>`;
 }
 
@@ -289,7 +300,7 @@ document.addEventListener('mousemove', e => {
     t.innerHTML = `<h4>${esc(s.name)} <span>${s.id} · ${esc(s.market)}</span></h4><dl><dt>收盤</dt><dd>${fmt(s.close, 2)}</dd><dt>漲跌幅</dt><dd class="${cls(s.change)}">${pct(s.change)}</dd><dt>成交金額</dt><dd>${yi(s.money)} 億</dd><dt>板塊占比</dt><dd>${fmt(sec ? s.money / sec.money * 100 : null, 1)}%</dd><dt>成交量</dt><dd>${fmt(s.volume)} ${MK.unit()}</dd><dt>量能較前日</dt><dd class="${cls(s.prevMoney ? s.money - s.prevMoney : null)}">${s.prevMoney ? pct((s.money / s.prevMoney - 1) * 100, 0) : '—'}</dd><dt>板塊</dt><dd style="font-family:var(--sans)">${esc(s.sector)}</dd></dl>`;
   } else {
     const s = lastAgg.sectors.find(x => x.name === target.dataset.hmSector); if (!s) return hideTip();
-    t.innerHTML = `<h4>${esc(s.name)} <span>${s.count} 檔</span></h4><dl><dt>成交金額</dt><dd>${yi(s.money)} 億</dd><dt>市場占比</dt><dd>${fmt(s.share, 1)}%</dd><dt>成交加權漲跌</dt><dd class="${cls(s.change)}">${pct(s.change)}</dd><dt>漲／跌／平</dt><dd><span class="up">${s.up}</span> / <span class="down">${s.down}</span> / ${s.flat}</dd><dt>漲停／跌停</dt><dd>${s.limitUp} / ${s.limitDown}</dd><dt>資金較前日</dt><dd class="${cls(s.moneyChange)}">${pct(s.moneyChange, 1)}</dd></dl>`;
+    t.innerHTML = `<h4>${esc(s.name)} <span>${s.count} 檔</span></h4><dl><dt>成交金額</dt><dd>${yi(s.money)} 億</dd><dt>${H.data?.scope === 'research' ? '研究範圍占比' : '市場占比'}</dt><dd>${fmt(s.share, 1)}%</dd><dt>成交加權漲跌</dt><dd class="${cls(s.change)}">${pct(s.change)}</dd><dt>漲／跌／平</dt><dd><span class="up">${s.up}</span> / <span class="down">${s.down}</span> / ${s.flat}</dd><dt>漲停／跌停</dt><dd>${s.limitUp} / ${s.limitDown}</dd><dt>資金較前日</dt><dd class="${cls(s.moneyChange)}">${pct(s.moneyChange, 1)}</dd></dl>`;
   }
   t.classList.add('show');
   const r = t.getBoundingClientRect(), x = e.clientX + 16 + r.width > innerWidth ? e.clientX - r.width - 14 : e.clientX + 16, y = e.clientY + 16 + r.height > innerHeight ? e.clientY - r.height - 12 : e.clientY + 16;
@@ -305,7 +316,7 @@ document.addEventListener('click', async e => {
   const a = el.dataset.heat;
   if (a === 'query') { H.live = false; H.date = document.getElementById('heat-date')?.value || H.date || defaultHeatDate(); await loadHeatmap({ date: H.date, query: true }); if (H.data && !H.error) ctx.toast(`已更新 ${H.data.date} 資金板塊熱浪圖（盤中即時已暫停）`); }
   else if (a === 'replay') { el.disabled = true; try { await openReplay(); } catch (err) { ctx.toast(err.message); el.disabled = false; } }
-  else if (a === 'live') { H.live = !H.live; H.error = ''; ctx.redraw(); if (H.live && liveOpen()) loadLive(); else if (H.live) ctx.toast(`目前非盤中，開盤後（平日 ${MK.market().sessions?.[0]?.[0] || ''}）自動更新`); }
+  else if (a === 'live') { ++heatRequest; H.loading = false; H.liveBusy = false; H.live = !H.live; if (H.feed) H.feed = { ...H.feed, status: H.live ? 'waiting' : 'display-paused' }; H.error = ''; ctx.redraw(); if (H.live && liveOpen()) loadLive(); else if (H.live) ctx.toast(`目前非盤中，開盤後（平日 ${MK.market().sessions?.[0]?.[0] || ''}）自動更新`); }
   else if (a === 'back') { H.focus = null; ctx.redraw(); }
   else if (a === 'fullscreen') { H.fullscreen = !H.fullscreen; ctx.redraw(); }
   else if (a === 'export') exportCSV();
