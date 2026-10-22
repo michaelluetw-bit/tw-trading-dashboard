@@ -11,8 +11,8 @@ globalThis.WebSocket = class extends RealSocket {
     if(m.event==='auth')setTimeout(()=>this.message({event:'authenticated'}),5);
     if(m.event==='subscribe')setTimeout(()=>{
       this.message({event:'subscribed',data:m.data.symbols.map(symbol=>({symbol,channel:'aggregates'}))});
-      if(!fs.existsSync(path.join(process.env.EQUITY_DATA_DIR,'no-quotes')))for(const symbol of m.data.symbols)this.message({event:'data',channel:'aggregates',data:{symbol,time:'2026-10-22 09:59:30',ts:Date.now(),close:110,change:10,totalAmount:220000,totalVolume:2}});
-      if(!this.timer)this.timer=setInterval(()=>{if(fs.existsSync(path.join(process.env.EQUITY_DATA_DIR,'disconnect')))this.close();else this.message({event:'heartbeat'});},500);
+      if(!fs.existsSync(path.join(process.env.EQUITY_DATA_DIR,'no-quotes')))for(const symbol of m.data.symbols)this.message({event:'data',channel:'aggregates',data:{symbol,time:'2026-10-22 09:59:30',ts:Date.parse('2026-10-22T09:59:30+08:00'),close:110,change:10,totalAmount:220000,totalVolume:2}});
+      if(!this.timer)this.timer=setInterval(()=>{const inject=path.join(process.env.EQUITY_DATA_DIR,'inject-quote.json');if(fs.existsSync(inject)){const value=JSON.parse(fs.readFileSync(inject,'utf8'));fs.unlinkSync(inject);this.message(value);}if(fs.existsSync(path.join(process.env.EQUITY_DATA_DIR,'disconnect')))this.close();else this.message({event:'heartbeat'});},500);
     },10);
   }
   close(){if(this.closed)return;this.closed=true;clearInterval(this.timer);this.dispatchEvent(new Event('close'));}

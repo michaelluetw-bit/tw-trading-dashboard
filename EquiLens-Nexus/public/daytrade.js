@@ -1,3 +1,4 @@
+import { quoteProviderName } from './quote-source.js';
 // 衡析 Nexus：當沖掃描面板（盤中雷達頁）— 即時推播狀態、當沖分數 Top N、排除統計、收盤後訊號檢討、當沖監控設定。
 // 資料：/api/daytrade（每 3 秒）、/api/daytrade/review、/api/daytrade/settings。只有設定了支援即時推播的資料源（例如富果）才顯示。
 import { esc, fmt, pct, cls } from './insight-ui.js';
@@ -57,7 +58,7 @@ function feedLine(d) {
   const short = f.subscribed < f.expected ? (f.since && Date.now() - f.since < 30e3 ? ' <b>重新訂閱中…</b>' : ' <b class="warn">訂閱不足</b>') : '';
   const hm = ms => new Date(ms).toLocaleTimeString('en-GB', { hour12: false }).slice(0, 5), lastDrop = f.drops?.at(-1);
   const drops = f.dropCount ? `<span class="${f.dropCount >= 5 ? 'warn' : ''}" title="${esc((f.drops || []).map(x => `${hm(x.at)} 連線 ${x.conns.join('、') || '—'}：${x.reason === 'no-heartbeat' ? '超過 75 秒沒有訊息' : x.reason === 'close' ? '伺服器關閉連線' : x.reason}`).join(' · '))}">今日斷線重連 ${f.dropCount} 次（最近 ${hm(lastDrop.at)}）</span>` : '';
-  return `<span>⚡ ${mode}</span><span>富果${plan}方案${lim ? `（上限 ${fmt(lim)}）` : ''}</span><span>訂閱 <b class="mono">${fmt(f.subscribed)}／${fmt(f.expected)}</b>${f.connections?.length > 1 ? `（${f.connections.length} 條連線）` : ''}${short}</span>${drops}${f.backfill?.busy ? `<span class="warn">斷線補資料中 ${f.backfill.done}／${f.backfill.total}</span>` : ''}${d.fallback ? '<span class="warn">訂閱數不足，今天改用精簡模式</span>' : ''}`;
+  return `<span>⚡ ${mode}</span><span>${esc(quoteProviderName(f.provider))}${f.provider==='shioaji'?'':` ${esc(plan)}方案`}${lim ? `（上限 ${fmt(lim)}）` : ''}</span><span>訂閱 <b class="mono">${fmt(f.subscribed)}／${fmt(f.expected)}</b>${f.connections?.length > 1 ? `（${f.connections.length} 條連線）` : ''}${short}</span>${drops}${f.backfill?.busy ? `<span class="warn">斷線補資料中 ${f.backfill.done}／${f.backfill.total}</span>` : ''}${d.fallback ? '<span class="warn">訂閱數不足，今天改用精簡模式</span>' : ''}`;
 }
 function prepLine(d) {
   const p = d.prep, base = '';
@@ -121,10 +122,10 @@ function settingsView(d) {
   const advice = `掃描 ${fmt(need.scanned || 0)} 檔（自選 ${need.watched || 0} 檔優先），每檔需要 3 個訂閱；不足時顯示等待，不發做多警示`;
   return `<div class="lv-settings">
     ${chk('enabled', '啟用當沖監控（盤中掃描、當沖訊號推播、收盤檢討）')}
-    <label class="dt-field"><span>富果方案</span>${sel('plan', ['auto', 'advanced', 'developer', 'basic'], v => ({ auto: '自動判斷', advanced: '進階（2,000 訂閱）', developer: '開發者（300 訂閱）', basic: '基本（5 訂閱）' })[v])}</label>
-    <p class="dt-foot">${advice}。自動判斷時先嘗試完整模式，訂閱不足就當天改用精簡模式。</p>
+    ${d.feed?.provider==='shioaji'?'<p class="dt-foot">Shioaji 行情轉接：固定精簡模式，每檔 1 個訂閱，上限 200 檔。</p>':`<label class="dt-field"><span>富果方案</span>${sel('plan', ['auto', 'advanced', 'developer', 'basic'], v => ({ auto: '自動判斷', advanced: '進階（2,000 訂閱）', developer: '開發者（300 訂閱）', basic: '基本（5 訂閱）' })[v])}</label>`}
+    <p class="dt-foot">${d.feed?.provider==='shioaji'?'目前來源沒有完整多週期歷史，不會因為即時看板有報價就判定當沖條件就緒。':`${advice}。自動判斷時先嘗試完整模式，訂閱不足就當天改用精簡模式。`}</p>
     <label class="dt-field"><span>掃描範圍</span>${sel('scope', ['all', 'watchlist'], v => ({ all: '全部研究族群＋自選', watchlist: '只掃自選' })[v])}</label>
-    <p class="dt-foot">全部研究族群時，30 日歷史資料每天開盤前首次載入約需 20 分鐘（富果歷史 API 每分鐘 60 次），自選股優先；載入完成前的股票顯示等待，不發做多警示。</p>
+    <p class="dt-foot">${d.feed?.provider==='shioaji'?'Shioaji 行情轉接不提供 30 日歷史或 REST 補資料；缺項維持等待，不發做多確認。':'全部研究族群時，30 日歷史資料每天開盤前首次載入約需 20 分鐘（富果歷史 API 每分鐘 60 次），自選股優先；載入完成前的股票顯示等待，不發做多警示。'}</p>
     <label class="dt-field"><span>顯示前幾名</span>${sel('top', [10, 20, 30])}<span>顯示門檻</span>${sel('displayMin', [0, 50, 60, 70, 80, 90], v => v ? `${v} 分以上` : '全部顯示')}</label>
     <p class="dt-foot">顯示門檻只決定掃描清單顯示哪些股票，不影響訊號與推播（訊號看「訊號分數門檻」）。</p>
     <label class="dt-field"><span>訊號分數門檻</span>${sel('minScore', [40, 50, 60, 70, 80])}</label>
