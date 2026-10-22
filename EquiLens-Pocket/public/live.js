@@ -1,4 +1,5 @@
 import { boardFeedNotice, snapshotErrorNotice, quoteProviderName, boardUnavailableLabel, boardRequestFailed, createBoardLoader } from './quote-source.js';
+import { groupRankNotice, canCompareGroupRank, currentGroupRank, groupRankFailed, createGroupRankLoader } from './group-rank-source.js';
 // 衡析 Pocket：盤中分頁（族群／自選即時看板、異動雷達、族群排名、雷達設定）、個股 K 線、熱浪時光機、個股籌碼深度、AI 盤後日報、推播訂閱。
 import { esc, fmt, pct, cls, sparkSVG, candleSVG, brokerHTML, holderHTML, warrantHTML, warrantBrokersHTML, alertRow, alertMatch, isMove, ALERT_GROUPS, reportHTML, rotationData, rotationSVG, replayStocks, priceRuleForm, priceRulesHTML, priceRuleBody } from './insight-ui.js';
 import { tx } from './i18n.js';
@@ -69,11 +70,11 @@ function streamPill(st) {
   return st.error ? `<span class="pill warn">即時推播未連線：${esc(st.authFailed ? '金鑰無效或方案不支援（10 分鐘後重試）' : st.error === 'no-heartbeat' ? '連線逾時，重新連線中' : st.error)}</span>` : '<span class="pill">即時推播連線中…</span>';
 }
 export function livePage() {
-  const m = L.monitor, open = marketOpen();
-  const status = `<div class="statusline"><span class="pill"><span class="dot ${open && m?.enabled ? 'live' : ''}"></span>${!m ? '讀取中' : !m.enabled ? '監控已關閉' : open ? `監控中 ${esc(L.board?.asOf?.slice(11, 19) || '')}` : '非盤中'}</span>${open && !L.board?.feed ? streamPill(m?.stream) : ''}<span class="pill">今日異動 ${L.alerts.filter(isMove).length}</span>${m?.news?.enabled ? `<span class="pill">🗞️ 新聞 ${L.alerts.filter(a => a.type === 'news').length}</span>` : ''}</div>`;
+  const m = L.monitor, open = marketOpen(), ranking=L.view==='groups', live=ranking?currentGroupRank(GR.live,MK.today()):L.board;
+  const status = `<div class="statusline"><span class="pill"><span class="dot ${open && m?.enabled ? 'live' : ''}"></span>${!m ? '讀取中' : !m.enabled ? '監控已關閉' : open ? `監控中 ${esc(live?.asOf?.slice(11, 19) || '')}` : '非盤中'}</span>${open && !live?.feed ? streamPill(m?.stream) : ''}<span class="pill">今日異動 ${L.alerts.filter(isMove).length}</span>${m?.news?.enabled ? `<span class="pill">🗞️ 新聞 ${L.alerts.filter(a => a.type === 'news').length}</span>` : ''}</div>`;
   const seg = `<div class="seg" style="margin-bottom:12px">${[['board', '看板'], ...(DT.info?.capable ? [['daytrade', '當沖']] : []), ['radar', '雷達'], ['rules', '提醒'], ['groups', '族群排名'], ['settings', '設定']].map(([v, l]) => `<button class="${L.view === v ? 'on' : ''}" data-lview="${v}">${l}</button>`).join('')}</div>`;
   const err = L.error ? `<div class="notice err">${esc(L.error)}</div>` : '';
-  return status + boardFeedNotice(L.board?.feed) + snapshotErrorNotice(m) + seg + err + (L.view === 'board' ? boardView() : L.view === 'daytrade' ? daytradeView() : L.view === 'radar' ? radarView() : L.view === 'rules' ? rulesView() : L.view === 'groups' ? groupsView() : settingsView());
+  return status + (ranking?'':boardFeedNotice(L.board?.feed)) + snapshotErrorNotice(m) + seg + err + (L.view === 'board' ? boardView() : L.view === 'daytrade' ? daytradeView() : L.view === 'radar' ? radarView() : L.view === 'rules' ? rulesView() : L.view === 'groups' ? groupsView() : settingsView());
 }
 /* ---------- 當沖掃描 ---------- */
 const DT_SIG = { 'dt-breakout': '💥 爆量突破', 'dt-vwap': '📈 VWAP 延續', 'dt-bid': '🟢 五檔增強', 'dt-weak': '⚠️ 多單轉弱', 'dt-risk': '🛑 參考停損' };
@@ -473,16 +474,17 @@ document.addEventListener('input', e => { if (e.target.id === 'rp-slider' && L.r
 
 /* ---------- 族群排名（低量排除＋√成交金額加權） ---------- */
 const GR = { live: null, record: null, dates: [], view: 'live', loading: false, error: '', open: new Set(), loaded: false };
+const loadRanking=createGroupRankLoader({request:()=>C.api('api/grouprank/query',{}),today:()=>MK.today(),receive:d=>{GR.live=d;},fail:e=>{GR.live=groupRankFailed(GR.live);if(!e.silent)GR.error=e.message;}});
 async function loadGroupRank() {
-  if (!GR.loaded) { GR.loaded = true; try { const r = await C.api('api/grouprank'); GR.record = r.record; GR.dates = r.dates; if (r.live) GR.live = r.live; } catch (e) { if (!e.silent) GR.error = e.message; } }
+  if (!GR.loaded) { GR.loaded = true; try { const r = await C.api('api/grouprank'); GR.record = r.record; GR.dates = r.dates; if (r.live) GR.live = currentGroupRank(r.live,MK.today()); } catch (e) { if (!e.silent) GR.error = e.message; } }
   if (!GR.live || marketOpen()) await queryGroupRank(true); else if (C.S.tab === 'live') C.draw();
 }
 async function queryGroupRank(quiet = false) {
   if (GR.loading) return; GR.loading = true; GR.error = ''; if (!quiet && C.S.tab === 'live') C.draw();
-  try { GR.live = await C.api('api/grouprank/query', {}); } catch (e) { if (!e.silent) GR.error = e.message; }
+  await loadRanking();
   GR.loading = false; if (C.S.tab === 'live' && L.view === 'groups' && !sheetOpen()) C.draw();
 }
-setInterval(() => { if (C && C.S.tab === 'live' && L.view === 'groups' && GR.view === 'live' && marketOpen() && !document.hidden) queryGroupRank(true); }, 30000);
+setInterval(() => { if (C && C.S.tab === 'live' && L.view === 'groups' && GR.view === 'live' && (marketOpen()||GR.live?.provider==='shioaji'&&GR.live.source==='live') && !document.hidden) queryGroupRank(true); }, 30000);
 const md = d => d ? `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}` : '';
 function grMove(g) {
   if (g.move == null) return g.prevRank == null ? '<span class="fr-mv new">—</span>' : '';
@@ -490,14 +492,14 @@ function grMove(g) {
   return g.move > 0 ? `<span class="fr-mv up">▲+${g.move}</span>` : `<span class="fr-mv down">▼${g.move}</span>`;
 }
 function groupsView() {
-  const d = GR.view === 'live' ? GR.live : GR.record, max = Math.max(0.5, ...(d?.groups || []).filter(g => g.score != null).map(g => Math.abs(g.score)));
+  const d = GR.view === 'live' ? currentGroupRank(GR.live,MK.today()) : GR.record, max = Math.max(0.5, ...(d?.groups || []).filter(g => g.score != null).map(g => Math.abs(g.score)));
   const ctl = `<div class="toolbar"><div class="field"><button class="btn primary" data-gr-query ${GR.loading ? 'disabled' : ''} style="flex:1">${GR.loading ? '<span class="spinner"></span> 更新中…' : '⟳ 更新排名'}</button><select class="sel" data-gr-date style="flex:1"><option value="live" ${GR.view === 'live' ? 'selected' : ''}>即時排名</option>${GR.dates.slice().reverse().map(x => `<option value="${x}" ${GR.view === x ? 'selected' : ''}>${md(x)} 收盤</option>`).join('')}</select></div></div>`;
   if (!d) return ctl + (GR.error ? `<div class="notice err">${esc(GR.error)}</div>` : '') + `<div class="empty">${GR.loading ? '<span class="spinner"></span> 計算族群排名…' : '按「更新排名」取得各族群目前的漲幅排名。'}</div>`;
-  const meta = `<div class="statusline"><span class="pill">${d.source === 'live' ? '盤中' : md(d.date) + ' 收盤'} · ${esc(String(d.asOf || '—').slice(11, 16))}</span><span class="pill">${d.quoted}/${d.stocks} 檔</span>${d.compare ? `<span class="pill">對照 ${md(d.compare.date)} 收盤</span>` : ''}</div>`;
+  const meta = `<div class="statusline"><span class="pill">${d.source === 'live' ? '盤中' : md(d.date) + ' 收盤'} · ${esc(d.asOf?String(d.asOf).slice(11,19):'—')}</span><span class="pill">${d.quoted}/${d.stocks} 檔</span>${canCompareGroupRank(d) ? `<span class="pill">對照 ${md(d.compare.date)} 收盤</span>` : ''}</div>`;
   const list = d.groups.map(g => { const open = GR.open.has(g.id);
-    return `<button class="fr-card ${g.score == null ? 'none' : ''}" data-gr-group="${esc(g.id)}"><span class="fr-rk num">${g.rank ?? '—'}</span><span class="fr-nm"><b>${esc(g.name)}</b><small><span class="up">${g.up}</span>/<span class="down">${g.down}</span> · 成交 ${fmt((g.amount || 0) / 1e8, 1)} 億${g.excluded ? ` · ${g.excluded} 檔低量` : ''}</small></span>${grMove(g)}<span class="fr-av num ${cls(g.score)}">${pct(g.score)}</span>
+    return `<button class="fr-card ${g.score == null ? 'none' : ''}" data-gr-group="${esc(g.id)}"><span class="fr-rk num">${g.rank ?? '—'}</span><span class="fr-nm"><b>${esc(g.name)}</b><small>涵蓋 ${g.quoted} / ${g.stocks} 檔 · <span class="up">${g.up}</span>/<span class="down">${g.down}</span> · 成交 ${fmt((g.amount || 0) / 1e8, 1)} 億${g.excluded ? ` · ${g.excluded} 檔低量` : ''}</small></span>${canCompareGroupRank(d)?grMove(g):'<span class="fr-mv new">—</span>'}<span class="fr-av num ${cls(g.score)}">${pct(g.score)}</span>
       ${g.score != null ? `<span class="fr-bar"><i class="${g.score >= 0 ? 'pos' : 'neg'}" style="width:${Math.abs(g.score) / max * 50}%;${g.score >= 0 ? 'left:50%' : 'right:50%'}"></i></span>` : ''}</button>
       ${open ? `<div class="fr-items"><p class="gr-ref">成交加權 <b class="${cls(g.wavg)}">${pct(g.wavg)}</b> · 簡單平均 <b class="${cls(g.avg)}">${pct(g.avg)}</b> · 上漲比 ${fmt(g.breadth, 0)}%</p>${g.items.map(x => `<button class="fr-item ${x.excluded ? 'ex' : ''}" data-gr-stock="${esc(x.id)}"><span>${esc(x.name)} <small class="num">${esc(x.id)}</small>${x.excluded ? ' <em class="ix-badge warn">低量</em>' : ''}</span><span class="num">${fmt(x.amount / 1e8, 1)}億</span><span class="num ${cls(x.rate)}">${pct(x.rate)}</span></button>`).join('')}</div>` : ''}`; }).join('');
-  return ctl + (GR.error ? `<div class="notice err">${esc(GR.error)}</div>` : '') + meta + `<section class="card fr-list">${list}</section><p class="foot">排名依「量能加權漲幅」：排除低量個股（成交低於族群 0.5% 或 1,000 萬），以 √成交金額加權，避免冷門股或單一權值股失真<br>▲ 名次上升　▼ 名次下降（對照前一交易日收盤）· 盤中每 30 秒自動更新</p>`;
+  return ctl + (GR.error ? `<div class="notice err">${esc(GR.error)}</div>` : '') + groupRankNotice(d) + meta + `<section class="card fr-list">${list}</section><p class="foot">排名依「量能加權漲幅」：排除低量個股（成交低於族群 0.5% 或 1,000 萬），以 √成交金額加權，避免冷門股或單一權值股失真<br>▲ 名次上升　▼ 名次下降（對照前一交易日收盤）· 盤中每 30 秒自動更新</p>`;
 }
 document.addEventListener('change', async e => { if (!C || !e.target.matches?.('[data-gr-date]')) return; GR.view = e.target.value; if (GR.view !== 'live') { try { const r = await C.api('api/grouprank?date=' + GR.view); GR.record = r.record; } catch (err) { if (!err.silent) GR.error = err.message; } } C.draw(); });

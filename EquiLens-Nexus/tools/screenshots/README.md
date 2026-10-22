@@ -36,3 +36,11 @@ Nexus/Pocket 分別使用 4391/4392，手機示意密碼同上。執行 `PLAYWRI
 使用獨立示意目錄，執行 demo-data 與 demo-data2 後啟用 shioaji、monitor 與 daytrade，關閉 autoUpdate。沿用 heat-stream-offline 模組，時間設為 `2026-10-22T10:00:00+08:00`，Nexus／Pocket 使用 4391／4392，橋接與登入只填示意通行碼。
 
 執行 `PLAYWRIGHT=<playwright/index.mjs> node tools/screenshots/capture-board-stream.mjs <輸出目錄>`。工具使用 Chrome，驗證兩版來源名稱、每卡報價時間、快照錯誤出現與解除、斷線空價、請求失敗與恢復。HTTP／斷線畫面以攔截測試瀏覽器的 API 回應模擬；正常報價來自離線橋接樣本，不接真實券商。
+
+## Shioaji 族群排名
+
+在**獨立示意目錄**先執行 `demo-data.mjs` 與 `demo-data2.mjs`，再執行 `EQUITY_DATA_DIR=<示意目錄> node tools/screenshots/group-rank-demo.mjs`。此工具要求 `demo-meta.json`，寫入合成報價與較少涵蓋的舊收盤檔；不能對正式資料目錄使用。
+
+Nexus 使用 `EQUITY_DATA_DIR=<示意目錄> PORT=4391 DEMO_TIME=2026-10-22T10:00:00+08:00 SHIOAJI_BRIDGE_TOKEN=offline-test FINMIND_API_TOKEN=offline-test node --import ./tests/helpers/group-rank-offline.mjs server.mjs`。Pocket 使用獨立 `MOBILE_DATA_DIR`、`NEXUS_URL=http://127.0.0.1:4391` 與 4392；示意密碼為上面的 `demo-password-123`。兩版不要設定正式金鑰。
+
+執行 `PLAYWRIGHT=<playwright/index.mjs> node tools/screenshots/capture-group-rank-stream.mjs <輸出目錄>`。工具驗證來源／時間／涵蓋、舊檔不顯示升降、斷線清空、API 失敗與 10 秒逾時、跨日延遲回應、恢復與歷史查閱。斷線及 HTTP 失敗使用測試瀏覽器攔截模擬；正常數字來自離線推播。200 檔上限、201 檔部分涵蓋、零成交額與來源切換由 API／單元測試驗證。

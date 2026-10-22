@@ -32,7 +32,8 @@ mobile UI and Web Push relay. There is no database and no build step: plain ES m
 | `lib/daytrade-context.mjs`, `lib/daytrade-history.mjs` | 30-session adjusted daily/minute history, completed 5m/60m aggregation, time-weighted full-depth book confirmation, watchlist history queue/cache |
 | `lib/daytrade-market.mjs` | Day-trade market context (pure, record-only): per-index minute series (TAIEX / TPEx) fed from snapshot rows `001`/`101` or Fugle index candles, change, 15-minute change, time-weighted intraday average, breadth; tailwind / neutral / headwind and relative-strength rules; the `market` record stored with each signal and used to group the review |
 | `lib/patterns.mjs`, `lib/pattern-service.mjs` | Pattern detection and the whole-market pattern snapshot |
-| `lib/grouprank.mjs` | Research-group ranking (turnover-weighted gain) |
+| `lib/grouprank.mjs` | Research-group ranking, strict stream quote conversion and scope/coverage comparison metadata |
+| `public/group-rank-source.js` | Shared desktop/mobile rank source, coverage, failure clearing and 10-second request timeout |
 | `lib/llm.mjs`, `lib/report.mjs` | AI providers (structured JSON output) and the after-market report |
 | `lib/flows.mjs`, `lib/market-card.mjs`, `lib/insight.mjs` | Taiwan-specific modules built on FinMind datasets (institutional/options overview, report card, brokers, shareholding) |
 | `lib/briefing.mjs`, `lib/newswatch.mjs` | Today's Brief (news, economic and earnings calendars) and news push (the data source's market news plus, for Taiwan, the cnyes news list via `lib/providers/cnyes.mjs`; the same article on both sources pushes once, a newly added source is recorded silently the first time) |
@@ -162,3 +163,5 @@ README screenshots live in `docs/images/` and are regenerated with `EquiLens-Nex
 
 `npm test` in each component. Nexus tests cover scoring, patterns, heatmap, radar, replay, providers' row handling,
 market rules, the setup and market-switch APIs (on a temporary data folder and port), secrets and translations.
+
+Shioaji group-ranking queries project `shioajiBoard()` rows through the existing ranking formula. Both query and cached GET responses recheck the current feed instead of returning a stale ten-second computation. This path opens no connections or REST calls. New records carry deterministic membership and quoted-symbol signatures; moves require matching signatures and ranking rules. Legacy history is sanitized for display without rewriting files. Closing capture retains its existing source order and 80% coverage threshold. Desktop and Pocket share identical `group-rank-source.js` files and continue polling every 30 seconds until the Shioaji live state transitions to a closing record.

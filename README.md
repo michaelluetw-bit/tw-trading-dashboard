@@ -63,7 +63,7 @@ component's `.local/` folder; API keys are encrypted by the operating system (se
 |---|---|
 | **Sector heatmap**<br>![Sector heatmap](docs/images/desktop-heatmap.webp) | **Live board and intraday radar**<br>![Live board and intraday radar](docs/images/desktop-radar.webp) |
 | **Intraday chart window**<br>![Intraday chart window](docs/images/desktop-chart.webp) | **Day-trade scanner**<br>![Day-trade scanner](docs/images/desktop-daytrade.webp) |
-| **Day-trade review by market regime**<br>![Day-trade review by market regime](docs/images/desktop-daytrade-review.webp) | **Group ranking**<br>![Group ranking](docs/images/desktop-grouprank.webp) |
+| **Day-trade review by market regime**<br>![Day-trade review by market regime](docs/images/desktop-daytrade-review.webp) | **Group ranking**<br>![Group ranking](docs/images/desktop-grouprank-shioaji.png) |
 | **AI after-market report**<br>![AI after-market report](docs/images/desktop-report.webp) | **Broker-branch tracking**<br>![Broker-branch tracking](docs/images/desktop-chips.webp) |
 | **Institutional and futures/options flows**<br>![Institutional and futures/options flows](docs/images/desktop-flows.webp) | **Stock diagnosis**<br>![Stock diagnosis](docs/images/desktop-detail.webp) |
 | **Pattern scanner**<br>![Pattern scanner](docs/images/desktop-patterns.webp) | **Topic evidence**<br>![Topic evidence](docs/images/desktop-topics.webp) |
@@ -94,6 +94,8 @@ Australia, Singapore, India.**
 Enable several sources and EquiLens picks a source per capability (in your order, or as you specify under
 *Data & Settings → Data sources → Advanced*). Features a source can't support are hidden or fall back to your
 research list's local data — the settings page shows exactly which features are available.
+
+Shioaji intraday group ranking also reuses the existing subscription cache (up to 200 stocks), keeping the original low-turnover filter and square-root-turnover formula. Desktop and mobile show the provider, quote time, feed status and coverage. Rank changes are shown only when group membership, quoted symbols and rules are verifiably identical. Legacy closing files remain unchanged; closing capture and rebuilding retain their snapshot/replay/daily-data paths.
 
 A live-stream source drives the intraday radar and day-trade monitoring. Shioaji also feeds the live board from the existing subscription cache, with actual quote times and connection status; snapshot errors are displayed separately. With Shioaji selected, the intraday heatmap reuses existing subscriptions (up to 200 stocks) and labels research scope, confirmed/planned subscriptions, quote coverage, quote time and connection status. It adds no subscriptions or upstream snapshot calls. Whole-market closing data, historical queries and snapshot-based time-machine recording remain unchanged. In Shioaji board mode, stocks outside the existing subscription list show an explicit unavailable state and no live price. Other providers retain their snapshot behavior; no additional subscriptions are created.
 
