@@ -10,9 +10,9 @@ export async function fetchNewsSource(state,id,request,{now}={}) {
  if(s.pausedUntil>time())return [];
  s.lastAttempt=time();
  try {const rows=await request();s.lastSuccess=time();s.error='';s.pausedUntil=null;return rows;}
- catch(e){s.error=e.message||String(e);s.pausedUntil=['auth','quota','plan'].includes(e.code)?time()+30*60e3:null;return [];}
+ catch(e){s.error=e.message||String(e);s.pausedUntil=['auth','quota','plan','forbidden'].includes(e.code)?time()+30*60e3:null;return [];}
 }
-export function newsSourceInfo(state,id,{enabled=true,now=Date.now()}={}) {
- const s=state[id]||empty(),pausedUntil=s.pausedUntil>now?s.pausedUntil:null;
+export function newsSourceInfo(state,id,{enabled=true,now=Date.now(),retryAt=0}={}) {
+ const s=state[id]||empty(),pausedUntil=Math.max(s.pausedUntil||0,retryAt||0)>now?Math.max(s.pausedUntil||0,retryAt||0):null;
  return {provider:id,...s,pausedUntil,enabled,status:!enabled?'disabled':pausedUntil?'paused':s.error?'error':s.lastSuccess?'ok':'waiting',retryAt:enabled?(pausedUntil||(s.error&&s.lastAttempt?s.lastAttempt+60e3:null)):null};
 }

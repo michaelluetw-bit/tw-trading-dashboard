@@ -38,12 +38,17 @@ const FEATURES = [
 
 /* ---------- 共用元件 ---------- */
 function capChips(p, labels) { return p.caps.length ? p.caps.map(c => `<span class="tag">${esc(labels[c] || c)}</span>`).join(' ') : `<span class="muted">${esc(t('目前市場不適用'))}</span>`; }
+function finmindNotice(p) {
+  if(p.id!=='finmind')return '';
+  const labels={missing:'尚未設定憑證',legacy_unverified:'既有金鑰未重新驗證',valid:'憑證可用',disabled:'已停用',auth_failed:'認證失敗，請重新驗證',changing:'正在變更憑證'};
+  return `<p class="fine" data-fm-access role="status">${esc(t(labels[p.credential]||labels.disabled))} · ${esc(t('權限未確認；可嘗試不代表已確認付費方案'))}${p.retryAt>Date.now()?` · ${esc(t('可重試時間'))} ${esc(new Date(p.retryAt).toLocaleString())}`:''}${p.environmentManaged?` · ${esc(t('金鑰由環境變數管理'))}`:''}</p>`;
+}
 function providerCard(p, cfg) {
   const labels = cfg.capabilityLabels, keyless = p.key === 'none';
   const status = keyless ? '<span class="tag cyan">免金鑰</span>' : p.configured ? `<span class="tag cyan">已設定</span>${p.plan?.plan ? ` <span class="tag">${esc(p.plan.plan)}</span>` : ''}` : '<span class="tag amber">未設定金鑰</span>';
   return `<article class="setup-provider ${p.enabled ? 'on' : ''}"><div class="sp-head"><label class="checkbox" style="flex-direction:row"><input type="checkbox" data-setup-enable="${p.id}" ${p.enabled ? 'checked' : ''}><b translate="no">${esc(p.name)}</b></label>${status}<a class="sp-link" href="${esc(p.site)}" target="_blank" rel="noopener noreferrer">官網 ↗</a></div>
-  <p class="fine">${esc(PROVIDER_NOTES[p.id] || '')}</p><div class="sp-caps">${capChips(p, labels)}</div>
-  ${keyless ? '' : `<form class="sp-key" data-setup-key="${p.id}"><input name="key" type="password" autocomplete="off" placeholder="${esc(p.configured ? '輸入新金鑰以更換' : '貼上 API 金鑰')}" required><button class="primary" type="submit">驗證並儲存</button>${p.configured ? `<button type="button" data-setup-recheck="${p.id}" title="重新讀取方案等級（例如升級或續訂後）">重新驗證</button><button type="button" data-setup-unkey="${p.id}">移除金鑰</button>` : ''}</form>`}</article>`;
+  <p class="fine">${esc(PROVIDER_NOTES[p.id] || '')}</p>${finmindNotice(p)}<div class="sp-caps">${capChips(p, labels)}</div>
+  ${keyless ? '' : `<form class="sp-key" data-setup-key="${p.id}"><input name="key" type="password" ${p.environmentManaged?'disabled':''} autocomplete="off" placeholder="${esc(p.configured ? '輸入新金鑰以更換' : '貼上 API 金鑰')}" required><button class="primary" type="submit" ${p.environmentManaged?'disabled':''}>驗證並儲存</button>${p.id==='finmind'&&p.configured?'<button type="button" data-setup-fm-disable>暫停 FinMind</button>':''}${p.configured ? `<button type="button" data-setup-recheck="${p.id}" title="重新讀取方案等級（例如升級或續訂後）">重新驗證</button><button type="button" data-setup-unkey="${p.id}">移除金鑰</button>` : ''}</form>`}</article>`;
 }
 function providerList(cfg) {
   const list = cfg.providers.filter(p => p.supportsMarket);
@@ -186,8 +191,9 @@ document.addEventListener('click', async e => {
     if ('setupFinish' in ds) { await C.api('config', { setupDone: true }); await refresh(); const st = C.state(); if (st.groups?.length && st.capabilities?.daily && confirm(t('開始下載研究族群的歷史資料？（可隨時停止，下次續傳）'))) await C.api('update', { scope: 'all', ids: [] }); await C.reload(); C.toast(t('設定完成')); return; }
     if (ds.setupLang) { await changeConfig('language', ds.setupLang); return; }
     if (ds.setupMarket) { if (ds.setupMarket === S.cfg?.config.market) return; const r = await C.api('config', { market: ds.setupMarket }); S.cfg = r; S.template = undefined; await C.reload(); return; }
-    if (ds.setupRecheck) { b.disabled = true; S.cfg = await C.api('provider-check', { id: ds.setupRecheck }); await C.reload(); C.toast(t('已重新驗證金鑰與方案')); return; }
-    if (ds.setupUnkey) { if (!confirm(t('移除這個資料源的金鑰？'))) return; S.cfg = await C.api('provider-key', { id: ds.setupUnkey, remove: true }); await C.reload(); C.toast(t('金鑰已移除')); return; }
+    if ('setupFmDisable' in ds) { S.cfg=await C.api('finmind-access',{action:'disable'});await C.reload();C.toast(t('FinMind 已停用'));return; }
+    if (ds.setupRecheck) { b.disabled = true; S.cfg = await C.api('provider-check', { id: ds.setupRecheck }); await C.reload(); C.toast(t(ds.setupRecheck==='finmind'?'憑證已驗證，權限仍未確認':'已重新驗證金鑰與方案')); return; }
+    if (ds.setupUnkey) { if (!confirm(t('移除這個資料源的金鑰？'))) return; S.cfg = await C.api('provider-key', { id: ds.setupUnkey, remove: true }); await C.reload(); C.toast(t(ds.setupUnkey==='finmind'&&S.cfg.providers.find(p=>p.id==='finmind')?.environmentManaged?'FinMind 已停用；環境變數需另行移除':'金鑰已移除')); return; }
     if (ds.setupUnllm) { if (!confirm(t('移除這個服務的金鑰？'))) return; await C.api('llm-key', { provider: ds.setupUnllm, remove: true }); await refresh(); C.toast(t('金鑰已移除')); return; }
     if ('setupExport' in ds) { const bundle = await C.api('export'); download(`equilens-settings-${bundle.market}-${bundle.exportedAt.slice(0, 10)}.json`, bundle); return; }
     if ('setupTemplate' in ds) { const r = await C.api('groups/import', { groups: S.template.groups, stocks: S.template.stocks || [] }); await C.reload(); C.toast(t('已載入範例族群（新增 {n} 檔）', { n: r.added })); return; }

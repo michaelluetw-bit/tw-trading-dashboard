@@ -1,54 +1,78 @@
 // FinMind（台股）：股票清單、交易日曆、日成交與還原股價、法人、月營收、本益比、個股新聞、股權分散、期貨與融資。
 // Sponsor 方案另有：全市場即時快照、分 K、全市場單日資料、全市場新聞、券商分點。
+import { finmindAccess, operationKey, classifyResponse, retryDeadline } from '../finmind-access.mjs';
 import { getSecret } from '../secrets.mjs';
 import { normalizeUniverse } from '../engine.mjs';
 import { kbarRows } from '../insight.mjs';
 import { DataError, stopped, sleep, addDays } from './common.mjs';
 
 export const DATASETS = { price: 'TaiwanStockPrice', adjusted: 'TaiwanStockPriceAdj', institutions: 'TaiwanStockInstitutionalInvestorsBuySell', revenue: 'TaiwanStockMonthRevenue', valuation: 'TaiwanStockPER' };
-const tokenOf = t => t ?? getSecret('finmind', 'FINMIND_API_TOKEN');
-let lastRequest = 0, requestTail = Promise.resolve();
-
-// 所有 FinMind 請求共用一條佇列（含金鑰驗證），避免瞬間大量請求
-// timeout：大型資料集（例如權證標的對照表約需 1 分鐘）可延長
-export async function request(dataset, params = {}, { interval = 7000, token, signal, timeout = 45000 } = {}) {
-  const previous = requestTail; let release;
-  requestTail = new Promise(r => release = r);
-  await previous;
-  try {
-    const delay = Math.max(0, lastRequest + interval - Date.now());
-    if (delay) await sleep(delay, signal);
-    if (signal?.aborted) throw stopped();
-    const secret = await tokenOf(token);
-    // dataset 以「/」開頭時為獨立端點（例如依券商代碼查分點：/taiwan_stock_trading_daily_report）
-    const path = dataset.startsWith('/'), url = new URL(`https://api.finmindtrade.com/api/v4${path ? dataset : '/data'}`);
-    url.search = new URLSearchParams(path ? params : { dataset, ...params }).toString();
-    lastRequest = Date.now();
-    return await fetchData(url, secret, signal, dataset, timeout);
-  } finally { release(); }
-}
-async function fetchData(url, secret, signal, label, timeout) {
-  let response;
-  try { response = await fetch(url, { headers: secret ? { Authorization: `Bearer ${secret}` } : {}, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout) }); }
-  catch { if (signal?.aborted) throw stopped(); throw new DataError('FinMind 連線失敗或逾時'); }
-  let body; try { body = await response.json(); } catch { throw new DataError('FinMind 回傳格式無法辨識'); }
-  const status = Number(body.status || response.status);
-  if (!response.ok || status !== 200) {
-    if ([401, 403].includes(status)) throw new DataError('{label}：金鑰或方案權限不足', { label }, { fatal: status === 401, code: 'auth' });
-    if ([402, 429].includes(status) || /limit|quota|次數|上限/i.test(String(body.msg))) throw new DataError('FinMind 額度或頻率限制，已保留進度，稍後可續傳', null, { fatal: true, code: 'quota' });
-    // 帳號等級不足（例如 Sponsor 到期變回免費）：FinMind 回 400「Your level is register…」
-    if (/your level|user level|sponsor/i.test(String(body.msg))) throw new DataError('{label}：FinMind 帳號目前不是 Sponsor 等級，沒有此資料的權限', { label }, { code: 'plan' });
-    throw new DataError('{label}：資料服務回應 {status}', { label, status });
+// The daily queue and snapshots keep separate scheduling, but share credential gates.
+export function createFinmindTransport({ access: injectedAccess, readSecret = () => getSecret('finmind','FINMIND_API_TOKEN'), fetcher = (...args) => fetch(...args), timeout = ms => AbortSignal.timeout(ms), now = Date.now, wait = sleep } = {}) {
+  let lastRequest = 0, requestTail = Promise.resolve(), manager;
+  const active = new Set();
+  const gate = () => {
+    if (!manager) {
+      manager = injectedAccess || finmindAccess();
+      manager.onGenerationChange(generation => { for (const item of active) if (item.generation !== generation) item.controller.abort(); });
+    }
+    return manager;
+  };
+  async function send(ticket, url, {token,signal,timeoutMs=45000,validation=false,candidate=false,daily=false} = {}) {
+    const a=gate();a.assertCurrent(ticket);
+    if(signal?.aborted)throw stopped();
+    const secret=token ?? await readSecret();a.assertCurrent(ticket);
+    if(signal?.aborted)throw stopped();
+    if(!secret)throw new DataError('FinMind 尚未設定金鑰',null,{code:'auth',fatal:true});
+    const item={generation:ticket.generation,controller:new AbortController()};active.add(item);
+    try {
+      let response;
+      try {if(daily)lastRequest=now();response=await fetcher(url,{headers:{Authorization:`Bearer ${secret}`},signal:AbortSignal.any([item.controller.signal,timeout(timeoutMs),...(signal?[signal]:[])])});}
+      catch {a.assertCurrent(ticket);if(signal?.aborted||item.controller.signal.aborted)throw stopped();throw new DataError('FinMind 連線失敗或逾時');}
+      a.assertCurrent(ticket);if(signal?.aborted)throw stopped();
+      const body=await response.json().catch(()=>null);
+      a.assertCurrent(ticket);if(signal?.aborted)throw stopped();
+      if(!response.ok || body?.status && Number(body.status)!==200) {
+        const kind=classifyResponse(response.status,body?.status,String(body?.msg||''));
+        if(!candidate)a.record(ticket,{kind,retryAt:kind==='quota'?retryDeadline(response.headers?.get('retry-after'),now()):undefined});
+        if(kind==='plan')throw new DataError('FinMind 此項資料遭來源拒絕（Sponsor 權限）',null,{code:'plan'});
+        throw new DataError('FinMind 資料請求未成功（{status}）',{status:response.status===200?Number(body?.status):response.status},{code:kind,fatal:['auth','quota'].includes(kind)});
+      }
+      if(validation) {
+        if(!(Number(body?.api_request_limit)>0))throw new DataError('FinMind 未接受此金鑰');
+        return {plan:'unknown',tier:'unknown',limitHour:Number(body.api_request_limit_hour)||null};
+      }
+      if(!Array.isArray(body?.data))throw new DataError('FinMind 回傳格式無法辨識');
+      a.record(ticket,{kind:'success'});return body.data;
+    } finally {active.delete(item);}
   }
-  if (!Array.isArray(body.data)) throw new DataError('{label}：資料欄位格式錯誤', { label });
-  return body.data;
+  async function request(dataset,params={}, {interval=7000,token,signal,timeout:timeoutMs=45000}={}) {
+    const a=gate(),ticket=a.capture(operationKey(dataset,params));
+    const previous=requestTail;let release;requestTail=new Promise(r=>release=r);
+    await previous;
+    try {
+      a.assertCurrent(ticket);if(signal?.aborted)throw stopped();
+      const delay=Math.max(0,lastRequest+interval-now());if(delay)await wait(delay,signal);
+      a.assertCurrent(ticket);if(signal?.aborted)throw stopped();
+      const endpoint=dataset.startsWith('/'),url=new URL(`https://api.finmindtrade.com/api/v4${endpoint?dataset:'/data'}`);
+      url.search=new URLSearchParams(endpoint?params:{dataset,...params}).toString();
+      return await send(ticket,url,{token,signal,timeoutMs,daily:true});
+    } finally {release();}
+  }
+  const tickSnapshot=async ({token,signal}={})=>{
+    const ticket=gate().capture('/taiwan_stock_tick_snapshot');
+    return send(ticket,new URL('https://api.finmindtrade.com/api/v4/taiwan_stock_tick_snapshot?data_id='),{token,signal,timeoutMs:20000});
+  };
+  const validate=async (key,{candidate=true}={})=>{
+    const ticket=gate().capture('/v2/user_info',true);
+    return send(ticket,new URL('https://api.web.finmindtrade.com/v2/user_info'),{token:key,timeoutMs:20000,validation:true,candidate});
+  };
+  return {request,tickSnapshot,validate};
 }
-// 盤中即時快照（Sponsor 方案，約每 10 秒更新）：一次取回全市場；不排入日資料佇列，避免被長時間更新卡住。
-export async function tickSnapshot({ token, signal } = {}) {
-  const url = new URL('https://api.finmindtrade.com/api/v4/taiwan_stock_tick_snapshot');
-  url.search = new URLSearchParams({ data_id: '' }).toString();
-  return fetchData(url, await tokenOf(token), signal, 'FinMind 即時快照', 20000);
-}
+const transport=createFinmindTransport();
+export const request=(...args)=>transport.request(...args);
+export const tickSnapshot=async (...args)=>transport.tickSnapshot(...args);
+
 export async function universe(options = {}) {
   const info = await request('TaiwanStockInfo', {}, options);
   const delisted = await request('TaiwanStockDelisting', {}, options);
@@ -81,13 +105,7 @@ export default {
   // 1：免費可用；'sponsor'：需 Sponsor 方案
   caps: { dayTrade: 'sponsor', universe: 1, calendar: 1, daily: 1, adjusted: 1, dailyAll: 'sponsor', snapshot: 'sponsor', intraday: 'sponsor', news: 1, marketNews: 'sponsor', valuation: 1, revenue: 'monthly', institutional: 1, institutionalAll: 'sponsor', brokers: 'sponsor', holders: 1, flows: 1, futures: 1, margin: 1 },
   snapshotMode: 'market',
-  async validate(key) {
-    const r = await fetch('https://api.web.finmindtrade.com/v2/user_info', { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(20000) }).catch(() => null);
-    const j = r?.ok ? await r.json().catch(() => null) : null;
-    if (!j || !(Number(j.api_request_limit) > 0)) throw new DataError('FinMind 未接受此金鑰');
-    const level = Number(j.level) || 0;
-    return { plan: j.level_title || `level ${level}`, tier: level >= 3 ? 'sponsor' : 'free', limitHour: Number(j.api_request_limit_hour) || null };
-  },
+  validate: (...args) => transport.validate(...args),
   universe: ctx => universe(ctx),
   calendar: async (from, ctx) => [...new Set((await request('TaiwanStockTradingDate', from ? { start_date: from } : {}, ctx)).map(r => r.date))].sort(),
   daily: async (id, from, to, ctx) => ({ price: await request(DATASETS.price, range(id, from, to), ctx), adjusted: await request(DATASETS.adjusted, range(id, from, to), ctx) }),

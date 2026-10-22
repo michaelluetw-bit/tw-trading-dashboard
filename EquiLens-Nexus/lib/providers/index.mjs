@@ -1,3 +1,4 @@
+import { finmindAccess } from '../finmind-access.mjs';
 // 資料源路由：每個資料源宣告支援的市場與能力；依使用者設定為每種能力挑一個可用的資料源。
 // 挑選順序：指定的偏好 → 啟用清單順序；略過沒有金鑰、不支援目前市場、或方案等級不足的資料源。
 import { config, activeMarket } from '../config.mjs';
@@ -29,6 +30,7 @@ export const hasKey = p => p.key === 'none' || secretConfigured(p.id, p.keyEnv);
 export function supports(p, cap, market = activeMarket().id) {
   if (!p || !p.markets.includes(market)) return false;
   const c = p.caps[cap]; if (!c) return false;
+  if (p.id === 'finmind') return !finmindAccess().view().legacyBlockedCaps.includes(cap);
   if (Array.isArray(c)) return c.includes(market); // 只在部分市場提供
   // 'sponsor'／'paid'：需付費方案；尚未驗證過等級時先當作可用，失敗時再提示
   if (c === 'sponsor' || c === 'paid') { const tier = providerInfo()[p.id]?.tier; return !tier || tier !== 'free'; }
@@ -38,7 +40,7 @@ export function enabledProviders() { return config().providers.enabled.map(id =>
 export function pick(cap) {
   const { prefer } = config().providers, list = enabledProviders();
   const order = prefer[cap] && list.some(p => p.id === prefer[cap]) ? [PROVIDERS[prefer[cap]], ...list] : list;
-  return order.find(p => hasKey(p) && supports(p, cap)) || null;
+  return order.find(p => hasKey(p) && (p.id !== 'finmind' || ['valid','legacy_unverified'].includes(finmindAccess().view().credential)) && supports(p, cap)) || null;
 }
 export const has = cap => !!pick(cap);
 // 每種能力目前由哪個資料源提供（設定頁與前端用來決定顯示哪些功能）
@@ -84,5 +86,5 @@ export const data = {
   institutional: (id, from, to, opts) => call('institutional', [id, from, to], opts),
   institutionalAll: (date, opts) => call('institutionalAll', [date], opts),
   // 台股在地模組（法人籌碼、分點、股權分散、期貨、融資）目前只有 FinMind 提供，直接使用其資料集介面
-  finmind: () => hasKey(finmind) && enabledProviders().includes(finmind) && activeMarket().id === 'TW' ? finmind.request : null,
+  finmind: () => hasKey(finmind) && ['valid','legacy_unverified'].includes(finmindAccess().view().credential) && enabledProviders().includes(finmind) && activeMarket().id === 'TW' ? finmind.request : null,
 };

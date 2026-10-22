@@ -41,3 +41,5 @@
 ## 相關檔案
 
 `EquiLens-Nexus/lib/config.mjs`、`lib/providers/`、`lib/secrets.mjs`、`public/setup.js`、`public/prefs.js`；設定 `.local/config.json`、`.local/settings.json`。
+
+FinMind 卡片的憑證停用、權限未確認與重新驗證見[憑證與能力狀態](finmind-access.md)。環境變數管理的金鑰需從啟動環境變更。

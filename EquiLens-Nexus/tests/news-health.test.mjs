@@ -20,3 +20,8 @@ test('transient news failures keep last success and expose next scan time',async
  assert.equal(result.lastSuccess,1000);assert.equal(result.error,'503');assert.equal(result.retryAt,121000);assert.equal(result.status,'error');
  assert.equal(health.newsSourceInfo(state,'cnyes',{enabled:false,now:62000}).status,'disabled');
 });
+
+test('E05/P02 global FinMind cooldown extends its displayed pause without changing other sources',async()=>{
+ const state=health.createNewsHealth();await health.fetchNewsSource(state,'finmind',async()=>{throw Object.assign(new Error('rejected'),{code:'forbidden'});},{now:1000});
+ const info=health.newsSourceInfo(state,'finmind',{enabled:true,now:1001,retryAt:3601000});assert.equal(info.pausedUntil,3601000);assert.equal(info.retryAt,3601000);assert.equal(health.newsSourceInfo(state,'cnyes',{enabled:true,now:1001}).status,'waiting');
+});
