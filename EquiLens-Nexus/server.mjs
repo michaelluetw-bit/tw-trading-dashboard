@@ -32,7 +32,7 @@ import { regimeOf, strengthOf } from './lib/daytrade-market.mjs';
 import { dispositions, tpexDayTrade, callWarrantQuotes } from './lib/providers/twse.mjs';
 import { cnyesNews } from './lib/providers/cnyes.mjs';
 import { queryFlows, validFlowDate, cacheableFlow } from './lib/flows.mjs';
-import { queryHeatmap, validHeatDate, cacheableHeatmap, buildLiveHeatmap, liveWindow, LIVE_REFRESH_MS } from './lib/heatmap.mjs';
+import { queryHeatmap, validHeatDate, cacheableHeatmap, buildStreamHeatmap, buildLiveHeatmap, liveWindow, LIVE_REFRESH_MS } from './lib/heatmap.mjs';
 import { focusNews, weekAgenda } from './lib/briefing.mjs';
 import { normalizeNews, validNewsInput, createNewsState, scanNews, saveNewsState, quietNow } from './lib/newswatch.mjs';
 import { normalizeWatchGroups, editWatchGroups, setWatch } from './lib/watchgroups.mjs';
@@ -58,6 +58,7 @@ let stream=null,streamState={provider:null,connected:false,symbols:0,subscribed:
 let dt=null,dtMeta=new Map(),dtPrep={date:'',busy:false,data:null,at:0},dtSaved='',dtFallback='',backfill={busy:false,again:false,started:0,done:0,total:0,error:''};
 const dtHistory=createHistoryLoader({read,write:(name,value)=>{fs.mkdirSync(path.join(LOCAL,'daytrade-history'),{recursive:true});write(name,value);},fetchHistory:(...args)=>data.streamHistory(...args)});
 let subscribedIds=new Set();
+let heatSessionRows=new WeakSet();
 // 五檔錄製器：今天的錄製檔、加錄清單與換股紀錄、收盤整理狀態
 const BOOKS=path.join(LOCAL,'books');
 let bookRec=null,bookDay={date:''},bookBusy=false,bookError='';
@@ -170,7 +171,7 @@ setInterval(()=>{
 
 /* ---------- 盤中即時推播（WebSocket，例如富果）＋當沖監控 ---------- */
 // 完整模式（例如富果進階方案）：每檔訂閱逐筆成交、1 分 K、五檔（3 個訂閱），依代號分成兩條連線，由當沖引擎整理成每檔的即時狀態；
-// 精簡模式（開發者／基本方案，或訂閱數不足）：每檔 1 個聚合行情訂閱。兩種模式都驅動異動雷達與即時看板；熱浪圖、時光機仍用上面的快照。
+// 精簡模式（開發者／基本方案，或訂閱數不足）：每檔 1 個聚合行情訂閱。兩種模式都驅動異動雷達與即時看板；Shioaji 熱浪圖讀取既有推播，其他來源與時光機使用快照。
 // 訂閱順序：自選股優先，再來是研究名單；超過方案上限時只訂閱前面的股票。
 // 連線且最近 75 秒內收過訊息（資料或伺服器心跳）才算運作中；個股沒成交時沿用最後一筆
 const streamFresh=()=>!!stream&&streamState.connected&&Date.now()-(streamState.alive||0)<75e3;
@@ -191,7 +192,7 @@ function yesterdayVolume(id,date){
 function onStreamRows(rows){
   const date=today(),fresh=rows.filter(r=>String(r.date).slice(0,10)===date);
   if(streamDate!==date){streamDate=date;streamRows=new Map();streamAsOf='';}
-  for(const r of fresh){r.yesterday_volume=yesterdayVolume(r.stock_id,date);streamRows.set(r.stock_id,r);if(String(r.date)>streamAsOf)streamAsOf=String(r.date);}
+  for(const r of fresh){if(streamState.provider==='shioaji')heatSessionRows.add(r);r.yesterday_volume=yesterdayVolume(r.stock_id,date);streamRows.set(r.stock_id,r);if(String(r.date)>streamAsOf)streamAsOf=String(r.date);}
   streamState={...streamState,lastAt:Date.now()};
   if(fresh.length)try{runRadar(date,fresh);}catch(e){console.error(t('異動雷達失敗：')+e.message);}
 }
@@ -235,6 +236,8 @@ let streamDrops={date:'',list:[]};
 function onStreamStatus(s){
   if(streamState.connected&&s.connected===false){const d=today();if(streamDrops.date!==d)streamDrops={date:d,list:[]};const down=(s.connections||[]).map((c,i)=>c.connected?null:i+1).filter(Boolean);streamDrops.list.push({at:Date.now(),conns:down,reason:s.error||'close'});if(streamDrops.list.length>50)streamDrops.list.shift();console.log(t('即時推播斷線：連線 {conns}（{reason}）',{conns:down.join('、')||'—',reason:s.error||'close'}));}
   const prev=streamState.since;streamState={...streamState,...s};
+  // 重連後先等待這次連線的報價，不能用前次連線快取恢復即時圖。
+  if(s.since&&s.since!==prev)heatSessionRows=new WeakSet();
   if(!s.connected&&dt){dt.engine.setFeed(false);dt.engine.markGap([...subscribedIds]);}
   // 盤中才連上或斷線重連：補資料完成前暫停訊號（盤前連線不需要）
   if(s.since&&s.since!==prev&&dt?.date===today()&&dt.engine.phase(Date.now())!=='pre')backfillAll();
@@ -386,12 +389,12 @@ async function dtPrepare(){
 }
 // 斷線重連（或盤中才啟動）後以 REST 補資料：自選股優先；單一執行，兩條連線同時重連只補一次
 async function backfillAll(onlyGaps=false){
-  const e=dt?.engine;if(!e)return;
+  const e=dt?.engine;if(!e||!data.pick('stream')?.streamBackfill)return;
   if(backfill.busy){if(Date.now()-backfill.started>30e3)backfill.again=true;return;}
   const ids=[...new Set([...dtScanIds(),...e.ids])].filter(id=>subscribedIds.has(id)&&(!onlyGaps||e.gaps.has(id)));
   e.markGap(ids);backfill={busy:true,again:false,started:Date.now(),done:0,total:ids.length,error:''};
   const interval=Math.ceil(60000/(streamState.perMinute||600))+10;
-  try{for(const id of ids){if(dt?.engine!==e||!feedWindow())break;try{const value=await data.streamBackfill(id,{interval});if(dt?.engine!==e)break;e.backfill(id,value||{});const r=e.row(id);if(r)onStreamRows([r]);}catch(x){backfill.error=x.message;if(blocked(x))break;}backfill.done++;}}
+  try{for(const id of ids){if(dt?.engine!==e||!feedWindow())break;try{const value=await data.streamBackfill(id,{interval});if(dt?.engine!==e)break;if(e.backfill(id,value||{})){const r=e.row(id);if(r)onStreamRows([r]);}}catch(x){backfill.error=x.message;if(blocked(x))break;}backfill.done++;}}
   finally{backfill.busy=false;if(backfill.again)setTimeout(()=>backfillAll().catch(()=>{}),1000).unref();}
 }
 // 大盤環境紀錄（當沖，只記錄、不影響訊號）：快照中的加權（001）、櫃買（101）指數每 10 秒餵入引擎；全市場快照另提供上市／上櫃漲跌家數
@@ -1207,7 +1210,7 @@ function importBundle(b,parts){
 }
 
 /* ---------- HTTP ---------- */
-const STATIC = { '/':'index.html', '/app.js':'app.js', '/heatmap.js':'heatmap.js', '/briefing.js':'briefing.js','/flow-cards.js':'flow-cards.js', '/live.js':'live.js', '/insight-ui.js':'insight-ui.js', '/report-card.js':'report-card.js', '/save-image.js':'save-image.js', '/prefs.js':'prefs.js', '/grouprank.js':'grouprank.js', '/i18n.js':'i18n.js', '/setup.js':'setup.js', '/market.js':'market.js', '/daytrade.js':'daytrade.js', '/intraday.js':'intraday.js', '/chipwatch.js':'chipwatch.js', '/hud.css':'hud.css', '/favicon.svg':'favicon.svg' };
+const STATIC = { '/':'index.html', '/app.js':'app.js', '/heatmap.js':'heatmap.js', '/heat-feed.js':'heat-feed.js', '/briefing.js':'briefing.js','/flow-cards.js':'flow-cards.js', '/live.js':'live.js', '/insight-ui.js':'insight-ui.js', '/report-card.js':'report-card.js', '/save-image.js':'save-image.js', '/prefs.js':'prefs.js', '/grouprank.js':'grouprank.js', '/i18n.js':'i18n.js', '/setup.js':'setup.js', '/market.js':'market.js', '/daytrade.js':'daytrade.js', '/intraday.js':'intraday.js', '/chipwatch.js':'chipwatch.js', '/hud.css':'hud.css', '/favicon.svg':'favicon.svg' };
 // 舊版模組丟出的一般錯誤（尚未改成 UserError）中，可以直接顯示的訊息
 const LEGACY_MESSAGE=/FinMind|金鑰|股票|族群|設定|格式|請|更新|無效|內容|行情|休市|公布|日期|查無|日報|雷達|時光機|畫格|分組|自選/;
 const server = http.createServer(async (req,res) => {
@@ -1225,6 +1228,7 @@ const server = http.createServer(async (req,res) => {
     if((flowBusy||heatBusy)&&req.method==='POST'&&['/api/update','/api/pattern-update','/api/news','/api/token','/api/provider-key','/api/config'].includes(route))return json(res,409,{error:t('即時查詢進行中，請稍候')});
     if(route==='/api/heatmap'&&req.method==='GET'){const dates=heatFiles();let date=url.searchParams.get('date');if(!date||date==='latest')date=dates.at(-1)||null;else if(!validHeatDate(date))throw new UserError('請選擇有效日期');return json(res,200,{data:date?read('heatmap-'+date+'.json',null):null,dates:dates.slice(-60),scope:data.has('dailyAll')?'market':'research'});}
     if(route==='/api/heatmap/live'&&req.method==='GET'){
+      if(data.pick('stream')?.id==='shioaji')return json(res,200,buildStreamHeatmap([...streamRows.values()].filter(r=>heatSessionRows.has(r)),{subscribedIds,connected:!!stream&&streamState.provider==='shioaji'&&streamState.connected,subscribedCount:streamState.subscribed,error:!!streamState.error,alive:streamState.alive,enabled:settings.monitor!==false,open:liveWindow(),universe:uniIndex().list,sectorOf:heatSectorOf(),today:today(),market:M()}));
       if(!liveWindow())return json(res,200,{live:false,data:liveHeat?.data?.date===today()?liveHeat.data:null,refreshMs:snapPlan().every});
       if(!data.has('snapshot'))throw new UserError('目前的資料源不支援盤中即時報價');
       return json(res,200,{live:true,data:await liveHeatmap(),refreshMs:snapPlan().every});
