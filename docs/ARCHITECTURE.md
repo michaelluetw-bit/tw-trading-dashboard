@@ -69,7 +69,19 @@ provider per capability (preferred source first, then the enabled order), inject
 Capabilities: `universe, calendar, daily, adjusted, dailyAll, snapshot, stream, dayTrade, intraday, news, marketNews,
 valuation, revenue, institutional, institutionalAll, brokers, holders, flows, futures, margin`.
 
-`stream` (Fugle WebSocket) only drives the intraday radar and live board. During the session `server.mjs` opens it for
+`planStream()` in `lib/stream.mjs` turns the provider's `stream` spec into the subscription plan (mode, channels,
+symbols, connection groups, order-book recorder extras); a spec with `channels.book: []` gets no extras, and the
+day-trade history loader only runs when the provider has `streamHistory`.
+
+SinoPac Shioaji (`lib/providers/shioaji.mjs`, caps `stream` only) connects to the local quote bridge
+`ws://127.0.0.1:4350` (`sj-quote-bridge` in the separate sj-trading project, which logs in with a quote-only key and
+cannot trade). It speaks the same protocol as Fugle's aggregates channel: `auth` → `authenticated`, `subscribe` →
+one `subscribed` entry per accepted symbol (rejected symbols come back as `error` and are not counted), `data`, and
+`heartbeat`. Plan `bridge`: 200 subscriptions, 1 connection, lite mode only. When the broker session drops, the bridge
+closes the WebSocket and refuses new handshakes (HTTP 503) until it recovers, so the client reports the outage and
+reconnects with its normal backoff. See [features/shioaji-bridge.md](features/shioaji-bridge.md).
+
+`stream` (Fugle WebSocket or the Shioaji bridge) only drives the intraday radar and live board. During the session `server.mjs` opens it for
 the watchlist first, then the research list, up to `stream.limit` for the verified plan, and refreshes the list when it
 changes. Stream rows use the live-snapshot format plus `volume_at_bid` / `volume_at_ask`; the radar takes stream rows
 for subscribed stocks and snapshot rows for the rest, and quotes use whichever row is newer. The heatmap and time machine

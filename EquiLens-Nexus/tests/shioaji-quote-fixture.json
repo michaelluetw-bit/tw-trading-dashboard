@@ -1,0 +1,60 @@
+{
+  "symbol": "2890",
+  "time": "2026-05-21 10:10:04",
+  "ts": 1779329404164,
+  "open": 29.8,
+  "high": 30.0,
+  "low": 29.7,
+  "close": 29.8,
+  "avgPrice": 29.82,
+  "change": 0.0,
+  "totalVolume": 8313,
+  "totalAmount": 247941050.0,
+  "volumeAtAsk": 3303,
+  "volumeAtBid": 4445,
+  "bids": [
+    {
+      "price": 29.75,
+      "size": 522
+    },
+    {
+      "price": 29.7,
+      "size": 1236
+    },
+    {
+      "price": 29.65,
+      "size": 373
+    },
+    {
+      "price": 29.6,
+      "size": 667
+    },
+    {
+      "price": 29.55,
+      "size": 218
+    }
+  ],
+  "asks": [
+    {
+      "price": 29.8,
+      "size": 34
+    },
+    {
+      "price": 29.85,
+      "size": 158
+    },
+    {
+      "price": 29.9,
+      "size": 83
+    },
+    {
+      "price": 29.95,
+      "size": 172
+    },
+    {
+      "price": 30.0,
+      "size": 736
+    }
+  ],
+  "suspend": false
+}

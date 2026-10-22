@@ -158,3 +158,15 @@ test('stream: an unsubscribe reply only removes the ids we cancelled, even if it
   ws.emit('message', { event: 'unsubscribed', data: [{ id: 'x1', channel: 'books', symbol: '3406' }, { id: 'x2', channel: 'books', symbol: '1569' }, { id: 'trades2330', channel: 'trades', symbol: '2330' }, { id: 'books2317', channel: 'books', symbol: '2317' }] });
   assert.deepEqual([last().subscribed, last().expected, last().extraSubscribed, last().extraExpected], [4, 4, 1, 1], 'main stays complete; only 3406 removed');
 });
+
+test('stream: a connection that fails before opening (error without close) is retried with backoff', () => {
+  const { clock, socks, last } = setup();
+  socks[0].emit('error');
+  assert.equal(last().connected, false);
+  clock.advance(5000);
+  assert.equal(socks.length, 2, 'retried after the first backoff');
+  socks[1].emit('error');
+  socks[1].emit('close'); // a late close for the same socket must not schedule a second retry
+  clock.advance(10000);
+  assert.equal(socks.length, 3, 'one retry per failure, backoff doubled');
+});

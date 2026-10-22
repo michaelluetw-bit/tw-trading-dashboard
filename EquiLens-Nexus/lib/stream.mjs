@@ -67,8 +67,10 @@ export function createStream({ spec, key, market, symbols = [], channels = ['agg
       const e = spec.parse(msg, market);
       if (e) { if (onEvent) try { onEvent(e); } catch { } if (e.key) keyed.set(e.key, e); else list.push(e); }
     });
-    sock.addEventListener('close', () => { if (ws === sock) { ws = null; status({ connected: false }); reopen(); } });
-    sock.addEventListener('error', () => { /* close 事件會接著處理重連 */ });
+    const lost = () => { if (ws === sock) { ws = null; status({ connected: false }); reopen(); } };
+    sock.addEventListener('close', lost);
+    // 連線建立前失敗時（例如對方尚未啟動），Node 的 WebSocket 可能只發出 error、不發 close：同樣安排重連；之後若再收到 close 不會重複
+    sock.addEventListener('error', lost);
   }
   function drop() { if (ws) { const s = ws; ws = null; try { s.close(); } catch { } } }
   function reopen(delay = backoff) {
@@ -130,6 +132,20 @@ export function createStreamPool({ groups, onStatus = () => { }, ...common }) {
   }
   set(groups);
   return { update: set, close() { for (const s of streams) s.close(); streams = []; }, get size() { return streams.length; } };
+}
+// 訂閱規劃（純函式）：依資料源的推播規格與方案，決定模式、頻道、股票、連線分組與五檔錄製器加錄。
+// fullAllowed：當沖監控已啟用、引擎就緒且今天沒有退回精簡模式；bookSlots(剩餘訂閱數)／bookExtras(主清單, 數量) 由伺服器提供。
+// 資料源的 channels.book 為空陣列時（例如 Shioaji 轉接服務）不加錄。
+export function planStream({ spec, planId, universe, watchlistSize, fullAllowed, bookSlots, bookExtras }) {
+  const plan = spec.plans?.[planId] || { limit: 300, connections: 1, perMinute: 600 };
+  const full = !!fullAllowed && !!spec.channels?.full && watchlistSize * spec.channels.full.length <= plan.limit;
+  const channels = full ? spec.channels.full : (spec.channels?.lite || ['aggregates']), ids = universe.slice(0, Math.floor(plan.limit / channels.length));
+  const groups = full && plan.connections > 1 && ids.length > 1 ? splitSymbols(ids, plan.connections) : [ids];
+  // 五檔錄製器加錄：用剩下的訂閱數（保留 50 個餘裕），依代號固定分到各連線
+  const book = spec.channels?.book || ['books'];
+  const slots = book.length ? bookSlots(plan.limit - ids.length * channels.length) : 0, extra = slots > 0 ? bookExtras(new Set(ids), slots) : [];
+  const ex = spreadSymbols(extra, groups.length);
+  return { planId, plan, full, channels, ids, total: universe.length, slots, extra, groups: groups.map((symbols, i) => ({ symbols, channels, extra: { symbols: ex[i] || [], channels: book } })) };
 }
 // 依代號排序後平均分成 n 組（固定分組，重啟後訂閱不變）
 export function splitSymbols(symbols, n) {
