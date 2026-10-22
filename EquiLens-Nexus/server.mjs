@@ -35,7 +35,8 @@ import { cnyesNews } from './lib/providers/cnyes.mjs';
 import { queryFlows, validFlowDate, cacheableFlow } from './lib/flows.mjs';
 import { queryHeatmap, validHeatDate, cacheableHeatmap, buildStreamHeatmap, buildLiveHeatmap, liveWindow, LIVE_REFRESH_MS } from './lib/heatmap.mjs';
 import { focusNews, weekAgenda } from './lib/briefing.mjs';
-import { normalizeNews, validNewsInput, createNewsState, scanNews, saveNewsState, quietNow } from './lib/newswatch.mjs';
+import { createNewsHealth, fetchNewsSource, newsSourceInfo } from './lib/news-health.mjs';
+import { collectArticles, normalizeNews, validNewsInput, createNewsState, scanNews, saveNewsState, quietNow } from './lib/newswatch.mjs';
 import { normalizeWatchGroups, editWatchGroups, setWatch } from './lib/watchgroups.mjs';
 export const APP_VERSION='3.0.0';
 const PORT = Number(process.env.PORT || 4330), ORIGIN = `http://127.0.0.1:${PORT}`;
@@ -69,7 +70,7 @@ let radarState=null,radarPlans={at:0,map:new Map()},alertsBox={date:'',list:[]},
 let priceRules=[],ruleState=null;
 let replayCache={key:'',data:null},boardGroupCache={key:'',data:null},calendarCache={date:'',dates:[]},heatSummaryCache=null;
 let grLive={at:0,data:null},grAttempt={date:'',at:0};
-let newsState=null,newsBusy=false,newsPauseUntil=0,newsStatus={at:0,error:'',found:0,seeded:false};
+let newsState=null,newsBusy=false,newsPauseUntil=0,newsHealth={},newsGeneration=0,newsStatus={at:0,error:'',found:0,seeded:false};
 let reportError='',reportAttempt={date:'',n:0,at:0};
 const kbarMiss=new Map(); // 資料源尚無分 K 的「股票:日期」，10 分鐘內不重查
 let kbarDenied={until:0,error:''}; // 金鑰或方案不足時 1 小時內不再請求分 K，直接用時光機
@@ -88,7 +89,7 @@ function loadMarketState(){
   job=read('last-job.json',null)||idleJob();if(job.running)job={...job,running:false,message:t('上次更新中斷，可重新執行續傳')};
   liveHeat=null;lastSnap=null;monitorPauseUntil=0;monitorError='';radarState=null;radarPlans={at:0,map:new Map()};alertsBox={date:'',list:[]};
   replayCache={key:'',data:null};boardGroupCache={key:'',data:null};calendarCache={date:'',dates:[]};heatSummaryCache=null;grLive={at:0,data:null};grAttempt={date:'',at:0};
-  newsState=null;newsStatus={at:0,error:'',found:0,seeded:false};newsPauseUntil=0;kbarMiss.clear();priceRules=read('price-alerts.json',[]).filter(r=>r&&RULE_KINDS.includes(r.kind)&&validId(r.stockId));ruleState=null;kbarDenied={until:0,error:''};
+  newsState=null;newsHealth=createNewsHealth(read('news-seen.json',null)?.health);newsGeneration++;newsStatus={at:0,error:'',found:0,seeded:false};newsPauseUntil=0;kbarMiss.clear();priceRules=read('price-alerts.json',[]).filter(r=>r&&RULE_KINDS.includes(r.kind)&&validId(r.stockId));ruleState=null;kbarDenied={until:0,error:''};
   if(stream){stream.close();stream=null;}streamRows=new Map();boardMinutes=new Map();streamSessionRows=new WeakSet();streamDate='';streamAsOf='';streamState={...streamState,connected:false};
   if(bookRec){bookRec.close();bookRec=null;}bookDay={date:''};
   dtHistory.reset();subscribedIds=new Set();dt=null;dtMeta=new Map();dtSaved='';dtFallback='';{const p=read('daytrade-prep.json',null);dtPrep={date:p?.date||'',busy:false,data:p,at:0};}
@@ -176,11 +177,12 @@ setInterval(()=>{
 // 訂閱順序：自選股優先，再來是研究名單；超過方案上限時只訂閱前面的股票。
 // 連線且最近 75 秒內收過訊息（資料或伺服器心跳）才算運作中；個股沒成交時沿用最後一筆
 const streamFresh=()=>!!stream&&streamState.connected&&Date.now()-(streamState.alive||0)<75e3;
-const streamFor=id=>streamFresh()?streamRows.get(id):null;
+const streamFor=id=>data.pick('stream')?.id==='shioaji'?shioajiBoard().rows.get(id)||null:streamFresh()?streamRows.get(id):null;
 // 行情時間：快照與推播取較新者
-const liveAsOf=()=>{const a=lastSnap?.asOf||'',b=streamFresh()?streamAsOf:'';return(a>b?a:b)||null;};
+const liveAsOf=()=>{const pushed=shioajiBoard();if(pushed)return pushed.rows.size?pushed.feed.asOf:null;const a=lastSnap?.asOf||'',b=streamFresh()?streamAsOf:'';return(a>b?a:b)||null;};
 // 某股某日最新的盤中資料：推播與快照取時間較新的一筆
 function liveRow(id,date){
+  if(data.pick('stream')?.id==='shioaji')return (!date||date===today())?streamFor(id):null;
   const s=streamFor(id),f=lastSnap&&(!date||lastSnap.date===date)?lastSnap.byId.get(id):null;
   return s&&(!date||String(s.date).slice(0,10)===date)&&(!f||String(s.date)>=String(f.date))?s:f;
 }
@@ -195,7 +197,8 @@ function onStreamRows(rows){
   if(streamDate!==date){streamDate=date;streamRows=new Map();boardMinutes=new Map();streamAsOf='';}
   for(const r of fresh){if(streamState.provider==='shioaji'){if(!validBoardQuote(r,date))continue;const previous=streamRows.get(r.stock_id);if(previous&&boardStamp(previous.date)>boardStamp(r.date))continue;streamSessionRows.add(r);recordBoardMinute(boardMinutes,r);}r.yesterday_volume=yesterdayVolume(r.stock_id,date);streamRows.set(r.stock_id,r);if(String(r.date)>streamAsOf)streamAsOf=String(r.date);}
   streamState={...streamState,lastAt:Date.now()};
-  if(fresh.length)try{runRadar(date,fresh);}catch(e){console.error(t('異動雷達失敗：')+e.message);}
+  const pushed=shioajiBoard(),accepted=pushed?fresh.filter(r=>pushed.rows.get(r.stock_id)===r):fresh;
+  if(accepted.length)try{runRadar(date,accepted);}catch(e){console.error(t('異動雷達失敗：')+e.message);}
 }
 const streamUniverse=()=>[...new Set([...watchlist,...scopeIds(researchScope),...ruleIds()])];
 // 當沖掃描範圍：預設全部研究族群＋自選（自選排前面，歷史資料與補資料先處理），可在設定改成只掃自選
@@ -549,6 +552,7 @@ function runRadar(date,rows){
 const savePriceRules=()=>write('price-alerts.json',priceRules);
 function runPriceAlerts(date,rows){
   if(!priceRules.some(r=>r.active))return;
+  const pushed=shioajiBoard();if(pushed)rows=rows.filter(r=>pushed.rows.get(r.stock_id)===r);
   if(ruleState?.date!==date)ruleState=createRuleState(date);
   const {alerts,changed}=scanPriceAlerts(ruleState,rows,priceRules,{meta:uniIndex().meta,watch:new Set(watchlist),market:M(),lang:language()});
   if(changed.length)savePriceRules();
@@ -557,7 +561,8 @@ function runPriceAlerts(date,rows){
 // 規則清單附上名稱與最新報價（介面顯示與目前距離門檻多遠）
 function priceRulesInfo(){
   const {meta}=uniIndex();
-  return{rules:priceRules.map(r=>{const q=quoteOf(r.stockId);return{...r,name:meta.get(r.stockId)?.name||r.stockId,label:ruleLabel(r),close:q?.close??null,change:q?.change??null};}),max:MAX_RULES,live:!!lastSnap&&liveWindow()};
+  const pushed=shioajiBoard(),rules=priceRules.map(r=>{const q=pushed?streamBoardQuote(pushed.rows.get(r.stockId)):quoteOf(r.stockId);return{...r,name:meta.get(r.stockId)?.name||r.stockId,label:ruleLabel(r),close:q?.close??null,change:q?.change??null,asOf:q?.at||(q?`${q.date}T${q.time}`:null),...(pushed?{provider:'shioaji',status:pushed.feed.planned>0&&!subscribedIds.has(r.stockId)?'not-subscribed':q?'live':['live','partial'].includes(pushed.feed.status)?'waiting':pushed.feed.status}:{})};});
+  return{rules,max:MAX_RULES,...(pushed?{date:today()}:{}),live:pushed?rules.some(r=>r.close!=null):!!lastSnap&&liveWindow(),...(pushed?{provider:'shioaji',feed:pushed.feed,asOf:pushed.rows.size?pushed.feed.asOf:null}:{})};
 }
 
 /* ---------- 即時看板 ---------- */
@@ -568,6 +573,7 @@ const snapRow=(id,date)=>lastSnap&&(!date||lastSnap.date===date)?lastSnap.byId.g
 // 時間（HH:MM 或 HH:MM:SS）在全日交易時段中的位置（0–1，扣除午休）
 const sessionPos=t=>{const m=minuteOf(t);if(m==null)return null;const p=M(),sec=Number(String(t).slice(6,8))||0;return Math.min(1,Math.max(0,(elapsedTrading(p,m)+sec/60)/(p.length||1)));};
 function quoteOf(id,{board=false}={}){
+  if(data.pick('stream')?.id==='shioaji')return streamBoardQuote(streamFor(id));
   const r=board?snapRow(id):liveRow(id); // 看板只用快照；其他（例如新聞事件）用推播與快照中較新的一筆
   if(r){const close=Number(r.close),ch=Number(r.change_price),prev=close-ch,n=v=>v==null||v===''?null:Number(v);return{close,change:prev>0?Math.round(ch/prev*1e4)/100:null,changePrice:ch,open:Number(r.open),high:Number(r.high),low:Number(r.low),volume:Number(r.total_volume),amount:Number(r.total_amount),yesterdayVolume:Number(r.yesterday_volume),bid:Number(r.buy_price),ask:Number(r.sell_price),volumeAtBid:n(r.volume_at_bid),volumeAtAsk:n(r.volume_at_ask),source:r===streamFor(id)?'stream':'snapshot',time:String(r.date).slice(11,19),date:String(r.date).slice(0,10)};}
   return null;
@@ -657,7 +663,8 @@ function prevCloseOf(id,date,daily=localDaily(id)){
 }
 // 當日開高低收量：即時快照 → 本機日成交 → 5 分 K 彙總（時光機組成時開盤為第一個畫格，近似值）
 function sessionBar(id,date,bars5,daily=localDaily(id)){
-  const r=snapRow(id,date);
+  if(data.pick('stream')?.id==='shioaji'){const bar=streamDayBar(id,date);if(bar)return bar;}
+  const r=data.pick('stream')?.id==='shioaji'?null:snapRow(id,date);
   if(r&&Number(r.open)>0)return[date,Number(r.open),Number(r.high),Number(r.low),Number(r.close),Math.round(Number(r.total_volume)||0)];
   const own=daily.find(x=>x[0]===date);if(own)return own;
   const xs=bars5.filter(b=>b[0].startsWith(date));return xs.length?[date,xs[0][1],Math.max(...xs.map(b=>b[2])),Math.min(...xs.map(b=>b[3])),xs.at(-1)[4],xs.reduce((a,b)=>a+b[5],0)]:null;
@@ -683,16 +690,29 @@ async function dailyHistory(id){
   fs.mkdirSync(path.join(LOCAL,'daily'),{recursive:true});write(name,{at:Date.now(),rows});
   return rows.length?rows:own;
 }
+function streamDayBar(id,date=today()){
+  const r=liveRow(id,date);if(!r)return null;
+  const values=[r.open,r.high,r.low,r.close,r.total_volume];
+  if(values.some(v=>v==null||v===''||!Number.isFinite(Number(v))))return null;
+  const [o,h,l,c,v]=values.map(Number);
+  return o>0&&l>0&&h>=Math.max(o,l,c)&&l<=Math.min(o,c)&&v>=0?[date,o,h,l,c,Math.round(v)]:null;
+}
 async function chartDay(id){
-  let rows=await dailyHistory(id),bar=null;const lastDate=rows.at(-1)?.[0]||'',r=snapRow(id),rDate=r?String(r.date).slice(0,10):'';
-  if(r&&rDate>lastDate&&Number(r.close)>0){const c=Number(r.close);bar=[rDate,Number(r.open)||c,Number(r.high)||c,Number(r.low)||c,c,Math.round(Number(r.total_volume)||0)];}
-  else{const day=replayToday();if(day&&day.date>lastDate)bar=replayDayBar(day,id);}
+  let rows=await dailyHistory(id),bar=null;const pushed=shioajiBoard(),lastDate=rows.at(-1)?.[0]||'';
+  if(pushed){bar=streamDayBar(id);if(bar)rows=rows.filter(r=>r[0]!==today());}
+  else{
+    const r=snapRow(id),rDate=r?String(r.date).slice(0,10):'';
+    if(r&&rDate>lastDate&&Number(r.close)>0){const c=Number(r.close);bar=[rDate,Number(r.open)||c,Number(r.high)||c,Number(r.low)||c,c,Math.round(Number(r.total_volume)||0)];}
+    else{const day=replayToday();if(day&&day.date>lastDate)bar=replayDayBar(day,id);}
+  }
   if(bar)rows=[...rows,bar];
-  return{bars:rows.slice(-160),today:bar?bar[0]:null,session:rows.at(-1)||null};
+  return{bars:rows.slice(-160),today:bar?bar[0]:null,session:rows.at(-1)||null,...(pushed?{todaySource:bar?'shioaji':null,todayProvisional:!!bar}:{})};
 }
 async function chartReport(id,period){
-  const info=boardData([id]).stocks[0],result=period==='day'?await chartDay(id):await chart5m(id);
-  return{id,name:info.name,sector:info.sector,score:info.score,period,prev:info.prev,quote:info.quote,daily:info.daily,inScope:inScope(id),live:!!lastSnap&&liveWindow(),stream:false,asOf:lastSnap?.asOf||null,...result};
+  const result=period==='day'?await chartDay(id):await chart5m(id),board=boardData([id]),info=board.stocks[0];
+  // Recheck after async history requests: a disconnected quote must not remain live.
+  if(board.provider==='shioaji'&&!info.quote&&result.todayProvisional){result.bars=result.bars.filter(r=>r[0]!==result.today);result.today=null;result.todaySource=null;result.todayProvisional=false;result.session=result.bars.at(-1)||null;}
+  return{id,name:info.name,sector:info.sector,score:info.score,period,date:board.date,status:info.status,prev:info.prev,quote:info.quote,daily:info.daily,inScope:inScope(id),live:board.live,stream:board.stream,asOf:board.asOf,...(board.provider?{provider:board.provider,feed:board.feed}:{}),...result};
 }
 
 /* ---------- 籌碼追蹤：分點追蹤、大戶集中度排行 ---------- */
@@ -942,26 +962,39 @@ function newsAlert(a,{meta,watch,quiet,time}){
 // 新聞來源：資料源的全市場新聞（例如 FinMind，額度或金鑰問題時暫停 30 分鐘）＋台股的鉅亨網（各自失敗不影響另一個）
 const cnyesOn=()=>M().id==='TW';
 async function scanNewsOnce(){
-  const x=clock(),dates=x.hour<8?[minusDays(x.date,1),x.date]:[x.date],rows=[],cn=[],errors=[];
-  if(data.has('marketNews')&&Date.now()>=newsPauseUntil)try{for(const d of dates)rows.push(...await data.marketNews(d));}catch(e){errors.push(e.message);if(blocked(e))newsPauseUntil=Date.now()+30*60e3;}
-  if(cnyesOn())try{cn.push(...await cnyesNews());}catch(e){errors.push(t('鉅亨網：')+e.message);}
-  if(!rows.length&&!cn.length&&errors.length)throw new Error(errors.join('；'));
+  const started=Date.now(),generation=newsGeneration,health=createNewsHealth(newsHealth),x=clock(),dates=x.hour<8?[minusDays(x.date,1),x.date]:[x.date];
+  const fmId=data.has('marketNews')?data.source('marketNews'):null;
+  const rows=fmId?await fetchNewsSource(health,fmId,async()=>{const rows=[];for(const date of dates)rows.push(...await data.marketNews(date));return rows;}):[];
+  const cn=cnyesOn()?await fetchNewsSource(health,'cnyes',()=>cnyesNews()):[];
+  if(generation!==newsGeneration)return;
+  newsHealth=health;
+  newsPauseUntil=fmId?health[fmId]?.pausedUntil||0:0;
   if(!newsState)newsState=createNewsState(read('news-seen.json',null));
-  // 一律以整個研究名單判斷「是否看過」，切換推播範圍時才不會把舊聞當新聞；新加入的鉅亨網第一次只記錄
+  const errors=newsSources().filter(s=>s.enabled&&s.error).map(s=>`${s.provider}: ${s.error}`);
+  if(![fmId,cnyesOn()?'cnyes':null].some(id=>id&&health[id]?.lastSuccess>=started)){
+    // Persist source failures without advancing dedup time during a total outage.
+    write('news-seen.json',{...saveNewsState(newsState),health});
+    newsStatus={at:Date.now(),error:errors.join('；'),found:0,seeded:false};return;
+  }
+  // Keep first-source seeding and global deduplication unchanged.
   const first=cn.length&&!newsState.sources.has('cnyes');
-  const ns=normalizeNews(settings.news),watch=new Set(watchlist),{fresh,seeded}=scanNews(newsState,first?rows:[...rows,...cn],{scope:new Set(scopeIds(researchScope)),seedOnly:first?cn:[]});
+  const scope=new Set(scopeIds(researchScope)),ns=normalizeNews(settings.news),watch=new Set(watchlist),{fresh,seeded}=scanNews(newsState,first?rows:[...rows,...cn],{scope,seedOnly:first?cn:[]});
   if(first)newsState.sources.add('cnyes');
-  write('news-seen.json',saveNewsState(newsState));
+  const freshKeys=new Set(fresh.flatMap(a=>a.keys));
+  for(const [id,items] of [[fmId,rows],['cnyes',first?[]:cn]])if(id&&health[id]&&collectArticles(items,scope).some(a=>a.keys.some(k=>freshKeys.has(k))))health[id].lastNew=Date.now();
+  write('news-seen.json',{...saveNewsState(newsState),health});
   const list=ns.scope==='watch'?fresh.filter(a=>a.ids.some(id=>watch.has(id))):fresh,quiet=quietNow(x.hour,ns.quiet),{meta}=uniIndex();
   if(list.length)addAlerts(x.date,list.map(a=>newsAlert(a,{meta,watch,quiet,time:x.hms})));
   newsStatus={at:Date.now(),error:errors.join('；'),found:list.length,seeded};
 }
+
 setInterval(()=>{
   if(!normalizeNews(settings.news).enabled||!(data.has('marketNews')||cnyesOn())||newsBusy||Date.now()-newsStatus.at<58e3)return;
   newsBusy=true;
   scanNewsOnce().catch(e=>{newsStatus={...newsStatus,at:Date.now(),error:e.message};}).finally(()=>{newsBusy=false;});
 },5000).unref();
-const newsInfo=()=>({...normalizeNews(settings.news),capable:data.has('marketNews')||cnyesOn(),sources:[data.has('marketNews')?data.source('marketNews'):null,cnyesOn()?'cnyes':null].filter(Boolean),status:{at:newsStatus.at||null,error:newsStatus.error,found:newsStatus.found,seeded:newsStatus.seeded,today:alertsFor(today()).list.filter(a=>a.type==='news').length,pausedUntil:newsPauseUntil>Date.now()?newsPauseUntil:null}});
+const newsSources=()=>[...new Set(['finmind',data.has('marketNews')?data.source('marketNews'):null,...(cnyesOn()?['cnyes']:[])].filter(Boolean))].map(id=>newsSourceInfo(newsHealth,id,{enabled:normalizeNews(settings.news).enabled&&(id==='cnyes'?cnyesOn():data.has('marketNews')&&data.source('marketNews')===id)}));
+const newsInfo=()=>({...normalizeNews(settings.news),capable:data.has('marketNews')||cnyesOn(),sources:[data.has('marketNews')?data.source('marketNews'):null,cnyesOn()?'cnyes':null].filter(Boolean),status:{sources:newsSources(),at:newsStatus.at||null,error:newsStatus.error,found:newsStatus.found,seeded:newsStatus.seeded,today:alertsFor(today()).list.filter(a=>a.type==='news').length,pausedUntil:newsPauseUntil>Date.now()?newsPauseUntil:null}});
 
 /* ---------- 推理模型 ---------- */
 // 金鑰以服務代號保存（anthropic、openai、gemini、compatible）；OpenAI 相容端點（例如本機模型）可不設金鑰
@@ -1168,7 +1201,7 @@ function saveRemote(b){
   return remoteInfo();
 }
 // 資料源或金鑰變更後：重新評估可用因子、清除暫停狀態
-function providersChanged(){invalidate();grLive={at:0,data:null};calendarCache={date:'',dates:[]};monitorPauseUntil=0;monitorError='';kbarDenied={until:0,error:''};newsPauseUntil=0;}
+function providersChanged(){newsGeneration++;for(const s of Object.values(newsHealth))s.pausedUntil=null;invalidate();grLive={at:0,data:null};calendarCache={date:'',dates:[]};monitorPauseUntil=0;monitorError='';kbarDenied={until:0,error:''};newsPauseUntil=0;}
 const keyText=(k,min=8)=>typeof k==='string'&&k.length>=min&&k.length<=10000&&!/\s/.test(k);
 async function saveProviderKey(id,key){
   const p=PROVIDERS[id];if(!p||p.key==='none')throw new UserError('此資料源不需要金鑰');
@@ -1225,7 +1258,7 @@ function importBundle(b,parts){
 }
 
 /* ---------- HTTP ---------- */
-const STATIC = { '/':'index.html', '/app.js':'app.js', '/heatmap.js':'heatmap.js', '/heat-feed.js':'heat-feed.js', '/briefing.js':'briefing.js','/flow-cards.js':'flow-cards.js', '/live.js':'live.js', '/quote-source.js':'quote-source.js', '/group-rank-source.js':'group-rank-source.js', '/insight-ui.js':'insight-ui.js', '/report-card.js':'report-card.js', '/save-image.js':'save-image.js', '/prefs.js':'prefs.js', '/grouprank.js':'grouprank.js', '/i18n.js':'i18n.js', '/setup.js':'setup.js', '/market.js':'market.js', '/daytrade.js':'daytrade.js', '/intraday.js':'intraday.js', '/chipwatch.js':'chipwatch.js', '/hud.css':'hud.css', '/favicon.svg':'favicon.svg' };
+const STATIC = { '/':'index.html', '/app.js':'app.js', '/heatmap.js':'heatmap.js', '/heat-feed.js':'heat-feed.js', '/briefing.js':'briefing.js','/flow-cards.js':'flow-cards.js', '/live.js':'live.js', '/quote-source.js':'quote-source.js', '/news-source.js':'news-source.js', '/group-rank-source.js':'group-rank-source.js', '/insight-ui.js':'insight-ui.js', '/report-card.js':'report-card.js', '/save-image.js':'save-image.js', '/prefs.js':'prefs.js', '/grouprank.js':'grouprank.js', '/i18n.js':'i18n.js', '/setup.js':'setup.js', '/market.js':'market.js', '/daytrade.js':'daytrade.js', '/intraday.js':'intraday.js', '/chipwatch.js':'chipwatch.js', '/hud.css':'hud.css', '/favicon.svg':'favicon.svg' };
 // 舊版模組丟出的一般錯誤（尚未改成 UserError）中，可以直接顯示的訊息
 const LEGACY_MESSAGE=/FinMind|金鑰|股票|族群|設定|格式|請|更新|無效|內容|行情|休市|公布|日期|查無|日報|雷達|時光機|畫格|分組|自選/;
 const server = http.createServer(async (req,res) => {
@@ -1316,7 +1349,7 @@ const server = http.createServer(async (req,res) => {
     if(route==='/api/news/settings'&&req.method==='POST'){
       const b=await body(req);if(!validNewsInput(b))throw new UserError('新聞推播設定格式錯誤');
       const was=normalizeNews(settings.news).enabled;settings={...settings,news:normalizeNews(b)};saveSettings();
-      if(!was&&settings.news.enabled){newsStatus={...newsStatus,at:0,error:''};newsPauseUntil=0;} // 剛開啟：立即掃描（第一次只記錄現有新聞）
+      if(!was&&settings.news.enabled){newsStatus={...newsStatus,at:0,error:''};newsPauseUntil=0;for(const s of Object.values(newsHealth))s.pausedUntil=null;} // 剛開啟：立即掃描（第一次只記錄現有新聞）
       return json(res,200,{ok:true,news:newsInfo()});
     }
     if(route==='/api/daytrade'&&req.method==='GET')return json(res,200,dtInfo());

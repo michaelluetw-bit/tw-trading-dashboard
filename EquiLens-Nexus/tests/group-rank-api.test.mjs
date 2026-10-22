@@ -27,7 +27,13 @@ test('Shioaji group rank bypasses denied snapshots, reuses 200 subscriptions and
   let monitor;for(let i=0;i<50;i++){monitor=await get('monitor');if(monitor.stream.active&&monitor.snapshot.error)break;await new Promise(r=>setTimeout(r,200));}
   assert.match(monitor.snapshot.error,/Sponsor/);assert.equal(monitor.stream.subscribed,200);
   const inject=(symbol,close,change)=>save('inject-quote.json',{event:'data',channel:'aggregates',data:{symbol,time:'2026-10-22 10:00:01',ts:Date.parse('2026-10-22T10:00:01+08:00'),close,change,totalAmount:40000000,totalVolume:400}});
-  for(const [id,close,change] of [['1100',110,10],['1101',90,-10],['1102',120,20]]){inject(id,close,change);await new Promise(r=>setTimeout(r,650));}
+  for(const [id,close,change] of [['1100',110,10],['1101',90,-10],['1102',120,20]]){
+   inject(id,close,change);let quote;
+   // The socket fixture and stream each batch asynchronously. Wait for delivery,
+   // rather than overwriting the injection file before its quote reaches the API.
+   for(let i=0;i<50;i++){quote=(await get('board?ids='+id)).stocks[0].quote;if(quote?.close===close&&quote?.amount===40000000&&quote?.time==='10:00:01')break;await new Promise(r=>setTimeout(r,100));}
+   assert.equal(quote?.close,close);assert.equal(quote?.amount,40000000);assert.equal(quote?.time,'10:00:01');
+  }
   const network=()=>fs.readFileSync(path.join(dir,'external.ndjson'),'utf8'),transport=()=>fs.readFileSync(path.join(dir,'transport.ndjson'),'utf8');
   const beforeNetwork=network(),beforeTransport=transport();
   let result=await query();

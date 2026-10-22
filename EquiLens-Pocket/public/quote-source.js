@@ -21,6 +21,46 @@ export function currentBoardResponse(board,today) {
   const result=clearBoard(board,'waiting');result.date=today;result.feed.asOf=null;return result;
 }
 
+export function chartRequestFailed(d,status='error') {
+  if(d?.provider!=='shioaji')return d;
+  const bars=d.todayProvisional?(d.bars||[]).filter(r=>r[0]!==d.today):d.bars;
+  return {...d,status,bars,session:null,quote:null,live:false,stream:false,asOf:null,today:null,todaySource:null,todayProvisional:false,feed:{...d.feed,status,asOf:null}};
+}
+export function currentChartResponse(d,today) {
+  if(d?.provider!=='shioaji')return d;
+  return d.date!==today?chartRequestFailed(d,'waiting'):['live','partial'].includes(d.feed?.status)?d:chartRequestFailed(d,d.feed?.status||'error');
+}
+export function priceRulesRequestFailed(info,status='error') {
+  if(info?.provider!=='shioaji')return info;
+  return {...info,live:false,asOf:null,feed:{...info.feed,status,asOf:null,quoted:0},rules:info.rules.map(r=>({...r,close:null,change:null,asOf:null,status:r.status==='not-subscribed'?r.status:status}))};
+}
+export function currentPriceRulesResponse(info,today) {
+  if(info?.provider!=='shioaji')return info;
+  return info.date!==today?{...priceRulesRequestFailed(info,'waiting'),date:today}:['live','partial'].includes(info.feed?.status)?info:priceRulesRequestFailed(info,info.feed?.status||'error');
+}
+export function preserveRuleDraft(root,render) {
+  const active=document.activeElement,form=root?.querySelector('[data-pa-form]');
+  const editing=form?.contains(active),name=editing?active.name:null,start=editing?active.selectionStart:null,end=editing?active.selectionEnd:null;
+  const fields=form?[...form.elements].filter(el=>el.name).map(el=>({name:el.name,value:el.value,checked:el.checked})):[];
+  render();
+  const next=form?root.querySelector('[data-pa-form]'):null;
+  if(!next)return;
+  for(const field of fields){const el=next.elements.namedItem(field.name);if(!el)continue;el.value=field.value;if(el.type==='checkbox')el.checked=field.checked;}
+  const focus=editing?next.elements.namedItem(name):null;focus?.focus({preventScroll:true});if(start!=null&&focus?.setSelectionRange)focus.setSelectionRange(start,end);
+}
+export function createChartLoader({request,receive,fail,timeoutMs=10000,timeoutMessage='圖表連線逾時，等待恢復'}) {
+  let sequence=0,pending=null;
+  return function load(intent){
+    const key=JSON.stringify(intent);if(pending?.key===key)return pending.promise;
+    const seq=++sequence,job={key,promise:null};
+    job.promise=(async()=>{let timer;
+      try{const result=await Promise.race([Promise.resolve().then(()=>request(intent)),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(timeoutMessage)),timeoutMs);})]);if(seq===sequence)receive(result,intent);}
+      catch(e){if(seq===sequence)fail(e,intent);}
+      finally{clearTimeout(timer);if(pending===job)pending=null;}
+    })();pending=job;return job.promise;
+  };
+}
+
 // Coalesce same-group polling, but let a new group replace the active intent.
 // A timeout clears live presentation even if the underlying fetch never settles.
 export function createBoardLoader({ group, request, receive, fail, today, timeoutMs = 10000 }) {

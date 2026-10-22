@@ -3110,5 +3110,22 @@
  "目前無有效即時排名": "No valid live ranking",
  "舊紀錄未記錄成分範圍，無法確認同範圍": "Legacy record has no membership scope; matching scope cannot be confirmed",
  "行情時間 {1}": "Quote time {1}",
- "研究總覽各族群的盤中漲幅排名：排除低量個股並以 √成交金額加權；同範圍且涵蓋一致時才比較升降名次。": "Intraday ranking of research groups: exclude low-turnover stocks and weight by the square root of turnover; compare rank changes only when membership and quote coverage match."
+ "研究總覽各族群的盤中漲幅排名：排除低量個股並以 √成交金額加權；同範圍且涵蓋一致時才比較升降名次。": "Intraday ranking of research groups: exclude low-turnover stocks and weight by the square root of turnover; compare rank changes only when membership and quote coverage match.",
+ "\u00b7 Shioaji \u7576\u65e5\u66ab\u4f30\uff08\u975e\u6b63\u5f0f\u6536\u76e4\uff09": "\u00b7 Provisional Shioaji daily bar (not an official close)",
+ "\u5c1a\u672a\u6383\u63cf": "Not scanned yet",
+ "\u66ab\u505c\u91cd\u8a66": "Waiting to retry",
+ "\u6700\u5f8c\u6210\u529f": "Last success",
+ "\u6700\u5f8c\u65b0\u6587": "Last new article",
+ "\u672a\u555f\u7528": "Disabled",
+ "\u8b80\u53d6\u6b63\u5e38": "Read successful",
+ "\u91cd\u8a66\u6642\u9593": "Retry time",
+ "\u932f\u8aa4": "Error",
+ "\u65e5 K\uff08\u4e0d\u9084\u539f\uff09{0}{1}": "Daily bars (unadjusted){0}{1}",
+ "\u65e5 K\uff08\u4e0d\u9084\u539f\uff09{0}{1} \u00b7 \u5de6\u53f3\u6ed1\u52d5\u6216\u9ede\u5716\u67e5\u770b\u5404\u6839\u6578\u503c": "Daily bars (unadjusted){0}{1} \u00b7 Swipe or tap to inspect each bar",
+ "\u65e5 K\uff08\u4e0d\u9084\u539f\uff09\u00b7 \u986f\u793a\u6700\u8fd1 {0} \u500b\u4ea4\u6613\u65e5{1}{2}": "Daily bars (unadjusted) \u00b7 Latest {0} sessions{1}{2}",
+ "\u65e5 K\uff08\u4e0d\u9084\u539f\uff09\u00b7 \u986f\u793a\u6700\u8fd1 {0} \u500b\u4ea4\u6613\u65e5{1}{2} \u00b7 \u5747\u7dda\u4ee5\u6536\u76e4\u50f9\u8a08\u7b97": "Daily bars (unadjusted) \u00b7 Latest {0} sessions{1}{2} \u00b7 Moving averages use closes",
+ "\u72c0\u614b\uff1a{0}{1}{2}": "Status: {0}{1}{2}",
+ "\u5716\u8868\u9023\u7dda\u903e\u6642\uff0c\u7b49\u5f85\u6062\u5fa9": "Chart request timed out; waiting for recovery",
+ "\u63d0\u9192\u72c0\u614b\u9023\u7dda\u903e\u6642\uff0c\u7b49\u5f85\u6062\u5fa9": "Reminder status request timed out; waiting for recovery",
+ "\u555f\u7528": "Enabled"
 }

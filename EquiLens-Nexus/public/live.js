@@ -1,4 +1,5 @@
-import { boardFeedNotice, snapshotErrorNotice, quoteProviderName, boardUnavailableLabel, boardRequestFailed, createBoardLoader } from './quote-source.js';
+import { newsSourcesHTML } from './news-source.js';
+import { boardFeedNotice, snapshotErrorNotice, quoteProviderName, boardUnavailableLabel, boardRequestFailed, createBoardLoader, currentChartResponse, chartRequestFailed, createChartLoader, priceRulesRequestFailed, currentPriceRulesResponse, preserveRuleDraft } from './quote-source.js';
 // 衡析 Nexus：盤中雷達頁（族群／自選即時看板＋異動雷達＋雷達設定）、個股 K 線視窗、桌面通知、新聞推播、個股籌碼深度、AI 盤後日報與排程設定。
 import { esc, fmt, pct, cls, sparkSVG, candleSVG, brokerHTML, holderHTML, warrantHTML, warrantBrokersHTML, alertRow, alertMatch, isMove, ALERT_GROUPS, reportHTML, priceRuleForm, priceRulesHTML, priceRuleBody } from './insight-ui.js';
 import { t, tx, translateTree } from './i18n.js';
@@ -44,7 +45,9 @@ async function refreshMonitor() { try { const m = await C.api('monitor'); L.moni
 const newsOn = () => !!L.monitor?.news?.enabled;
 export async function enterLive() { await Promise.all([loadBoard(), loadAlerts(!L.date), loadMonitor(), loadDaytrade(), loadRules()]); repaint(); }
 /* ---------- 自訂提醒 ---------- */
-async function loadRules() { try { L.rules = await C.api('price-alerts'); } catch (e) { L.error = e.message; } }
+const loadRuleState=createChartLoader({request:()=>C.api('price-alerts'),receive:info=>{L.rules=currentPriceRulesResponse(info,MK.today());},fail:e=>{L.rules=priceRulesRequestFailed(L.rules);if(!e.silent)L.error=e.message;},timeoutMessage:'提醒狀態連線逾時，等待恢復'});
+function loadRules() {return loadRuleState({resource:'price-alerts'});}
+setInterval(async()=>{if(!C||document.hidden||!document.querySelector('[data-pa-box]'))return;await loadRules();paintRules();},10000);
 // 重畫所有顯示提醒的區塊（盤中雷達頁、個股診斷、K 線視窗），不整頁重繪以免清掉輸入中的表單
 function paintRules() {
   for (const el of document.querySelectorAll('[data-pa-box]')) el.innerHTML = priceRulesHTML(L.rules, { stockId: el.dataset.paBox || null, empty: el.dataset.paBox ? '這檔股票尚未設定提醒' : '尚未設定提醒。在下方輸入股票代號與條件，或在個股視窗設定。' });
@@ -66,7 +69,6 @@ setInterval(async () => {
   if (C.page() === 'settings' && document.getElementById('news-status')) { await refreshMonitor(); const el = document.getElementById('news-status'); if (el) el.innerHTML = newsStatusHTML(); }
   if (C.page() === 'home' && L.report?.busy) { await loadReport(); C.redraw(); }
   if (onPage && marketOpen() && tick % 3 === 0) await refreshMonitor(); // 盤中每 30 秒確認即時推播狀態
-  if (marketOpen() && tick % 3 === 0 && document.querySelector('[data-pa-box]') && !document.activeElement?.closest?.('[data-pa-form]')) { await loadRules(); paintRules(); } // 觸發後停用的單次提醒
 }, 10000);
 // 即時推播（例如富果 WebSocket）運作時：盤中雷達頁的異動每 3 秒更新；Shioaji 看板共用推播快取；開著桌面通知時，異動也每 3 秒取一次
 const streamOn = () => L.board?.provider==='shioaji' || !!L.monitor?.stream?.active;
@@ -222,31 +224,29 @@ export async function openChart(id, period = K.period) {
   if (!dialog.open) dialog.showModal();
   paintChart(); await refreshChart();
 }
-async function refreshChart() {
-  const id = K.id, period = K.period, seq = ++K.seq;
-  try {
-    if (period === 'live') { const d = await C.api(`intraday?id=${id}${K.group ? '&group=' + encodeURIComponent(K.group) : ''}`); if (seq !== K.seq) return; K.live = d; K.error = ''; }
-    else { const d = await C.api(`chart?id=${id}&period=${period}`); if (seq !== K.seq) return; K.data = d; K.error = ''; }
-  }
-  catch (e) { if (seq !== K.seq) return; K.error = e.message; }
-  if (chartShown(id)) paintChart();
-}
+const loadChart=createChartLoader({
+  request:({id,period,group})=>C.api(period==='live'?`intraday?id=${id}${group?'&group='+encodeURIComponent(group):''}`:`chart?id=${id}&period=${period}`),
+  receive:(d,intent)=>{if(intent.period==='live')K.live=d;else K.data=currentChartResponse(d,MK.today());K.error='';if(chartShown(intent.id))preserveRuleDraft(document.getElementById('detail'),paintChart);},
+  fail:(e,intent)=>{K.data=chartRequestFailed(K.data);if(!e.silent)K.error=e.message;if(chartShown(intent.id))preserveRuleDraft(document.getElementById('detail'),paintChart);}
+});
+function refreshChart() {return loadChart({id:K.id,period:K.period,group:K.group});}
+
 setInterval(() => { if (K.id && K.period !== 'live' && marketOpen() && !document.hidden && chartShown(K.id)) refreshChart(); }, 10000);
 setInterval(() => { if (K.id && K.period === 'live' && marketOpen() && !document.hidden && chartShown(K.id)) refreshChart(); }, 3000);
 function paintChart() {
   if (K.period === 'live') return paintLive();
-  const box = document.getElementById('detail'), id = K.id, d = K.data?.id === id ? K.data : null, s = L.board?.stocks.find(x => x.id === id);
-  const ready = d && d.period === K.period, q = d?.quote ?? s?.quote, dayBar = d?.session || null;
-  const price = q?.close ?? dayBar?.[4] ?? d?.daily?.price ?? s?.daily?.price, chg = q?.change ?? d?.daily?.change ?? s?.daily?.change;
+  const box = document.getElementById('detail'), id = K.id, d = K.data?.id === id ? currentChartResponse(K.data,MK.today()) : null, s = L.board?.stocks.find(x => x.id === id);
+  const ready = d && d.period === K.period, q = d ? d.quote : s?.quote, dayBar = d?.provider==='shioaji'?null:d?.session || null;
+  const price = d?.provider==='shioaji'?q?.close:q?.close ?? dayBar?.[4] ?? d?.daily?.price ?? s?.daily?.price, chg = d?.provider==='shioaji'?q?.change:q?.change ?? d?.daily?.change ?? s?.daily?.change;
   const live = d?.live && marketOpen(), stamp = live ? `<span class="tag cyan"><span class="pulse"></span> 盤中 · 每 10 秒更新 · <b class="mono">${esc(q?.time || '')}</b></span>` : q?.date ? `<span class="tag">${esc(md(q.date))} ${esc(q.time || '')}</span>` : '';
   const info = [q?.open ?? dayBar?.[1], q?.high ?? dayBar?.[2], q?.low ?? dayBar?.[3]];
-  const caption = !ready ? '' : d.period === 'day' ? `日 K（不還原）· 顯示最近 ${Math.min(120, d.bars.length)} 個交易日${d.today ? ` · 最後一根為 ${md(d.today)} ${live ? '即時' : '當日'}資料` : ''} · 均線以收盤價計算`
+  const caption = !ready ? '' : d.period === 'day' ? `日 K（不還原）· 顯示最近 ${Math.min(120, d.bars.length)} 個交易日${d.todayProvisional?' · Shioaji 當日暫估（非正式收盤）':''}${d.today ? ` · 最後一根為 ${md(d.today)} ${live ? '即時' : '當日'}資料` : ''} · 均線以收盤價計算`
     : `${d.notice ? `<span class="amber">⚠ ${esc(d.notice)}</span><br>` : ''}5 分 K · ${d.days.map(x => md(x.date)).join('、')}${d.days.some(x => x.source === 'replay') ? ' · 盤中以每分鐘快照組成（高低點為近似值），收盤後自動改用 FinMind 分 K' : ' · FinMind 分 K'} · 均線跨日連續計算`;
   box.innerHTML = `<div class="detailtop" data-chart="${id}"><div><p class="eyebrow">${K.period === 'day' ? 'Daily' : '5-Minute'} K · MA5 / MA20 ${stamp}</p><h2>${esc(d?.name || s?.name || id)} <span class="stockcode">${id}</span></h2>
     <div class="price">${fmt(price, 2)} <span class="${cls(chg)}" style="font-size:1rem">${pct(chg)}${q?.changePrice != null ? ` · ${q.changePrice > 0 ? '+' : ''}${fmt(q.changePrice, 2)}` : ''}</span></div>
     <p class="mono">開 ${fmt(info[0], 2)} · 高 ${fmt(info[1], 2)} · 低 ${fmt(info[2], 2)}${q?.volume ? ` · 成交 ${fmt(q.volume)} 張` : dayBar ? ` · 成交 ${fmt(dayBar[5])} 張` : ''}${q?.amount ? ` · ${yi(q.amount)} 億` : ''}${q?.bid ? ` · 委買 ${fmt(q.bid, 2)} / 委賣 ${fmt(q.ask, 2)}` : ''}</p></div>
     <div class="actions"><div class="segmented">${CHART_TABS.map(([v, l]) => `<button class="${K.period === v ? 'selected' : ''}" data-cperiod="${v}">${l}</button>`).join('')}</div>${C.inScope(id) ? `<button data-stock-detail="${id}">個股診斷 ↗</button>` : ''}<button class="close" data-action="close-detail" aria-label="關閉">×</button></div></div>
-    <div class="detailbody"><section class="chartpanel">${K.error && !ready ? `<div class="empty"><p>${esc(K.error)}</p></div>` : ready ? candleSVG(d.bars, { w: 960, h: 400, show: d.period === 'day' ? 120 : 162, period: d.period, key: id + d.period, prev: d.prev, prevs: d.days ? Object.fromEntries(d.days.map(x => [x.date, x.prev])) : null }) : `<div class="empty"><p><i class="spinner"></i>讀取${K.period === 'day' ? '日' : ' 5 分'} K…</p></div>`}<p class="chartcaption">${caption}</p></section>${rulesSection({ id, name: d?.name || s?.name || id, close: price })}</div>`;
+    <div class="detailbody"><section class="chartpanel">${d?.feed?boardFeedNotice(d.feed):''}${d?.provider==='shioaji'&&!q?`<p class="fine">${esc(boardUnavailableLabel(d.status||d.feed?.status))}</p>`:''}${K.error && !ready ? `<div class="empty"><p>${esc(K.error)}</p></div>` : ready ? candleSVG(d.bars, { w: 960, h: 400, show: d.period === 'day' ? 120 : 162, period: d.period, key: id + d.period, prev: d.prev, prevs: d.days ? Object.fromEntries(d.days.map(x => [x.date, x.prev])) : null }) : `<div class="empty"><p><i class="spinner"></i>讀取${K.period === 'day' ? '日' : ' 5 分'} K…</p></div>`}<p class="chartcaption">${caption}</p></section>${rulesSection({ id, name: d?.name || s?.name || id, close: price })}</div>`;
 }
 
 /* ---------- 個股即時走勢（K 線視窗的「走勢」分頁）：全日走勢、當日均價線、族群均價線、五檔、成交明細，盤中每 3 秒更新 ---------- */
@@ -306,8 +306,8 @@ export function claudeSettings() {
 const hhmm = ms => MK.clock(ms);
 function newsStatusHTML() {
   const n = L.monitor?.news, s = n?.status; if (!n) return '';
-  if (!n.enabled) return '目前關閉';
-  return `${s?.error ? `<span class="down">⚠ ${esc(s.error)}</span>${s.pausedUntil ? `（${hhmm(s.pausedUntil).slice(0, 5)} 後重試）` : ''}` : s?.at ? `上次掃描 <b class="mono">${hhmm(s.at)}</b>${s.seeded ? ' · 首次掃描，現有新聞只記錄不推播' : ` · 本次新增 <b class="mono">${s.found}</b> 則`}` : '即將開始第一次掃描…'} · 今日新聞 <b class="mono">${L.alerts.filter(a => a.type === 'news').length || s?.today || 0}</b> 則`;
+  if (!n.enabled) return '目前關閉'+newsSourcesHTML(n,{t:tx,time:ms=>MK.dateTime(ms)});
+  return `${s?.error && !s?.sources?.length ? `<span class="down">⚠ ${esc(s.error)}</span>${s.pausedUntil ? `（${hhmm(s.pausedUntil).slice(0, 5)} 後重試）` : ''}` : s?.at ? `上次掃描 <b class="mono">${hhmm(s.at)}</b>${s.seeded ? ' · 首次掃描，現有新聞只記錄不推播' : ` · 本次新增 <b class="mono">${s.found}</b> 則`}` : '即將開始第一次掃描…'} · 今日新聞 <b class="mono">${L.alerts.filter(a => a.type === 'news').length || s?.today || 0}</b> 則${newsSourcesHTML(n,{t:tx,time:ms=>MK.dateTime(ms)})}`;
 }
 export function newsSettings() {
   if (!L.monitor) { refreshMonitor().then(() => C.page() === 'settings' && C.redraw()); return ''; }
