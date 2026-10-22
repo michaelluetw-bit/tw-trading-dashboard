@@ -21,7 +21,7 @@ const C = { up: '#ff3d5a', down: '#16e38b', grid: '#16263d', text: '#6b84a6', ma
 const PAGES = {
   home: { title: '今日焦點', eyebrow: 'Morning Brief · Pre-market', sub: '開盤前先看這裡：昨日台股收盤後到今晨美股收盤的焦點新聞，以及本周經濟數據與科技財報行程。' },
   heatmap: { title: '資金熱浪', eyebrow: 'Market Pulse · Sector Heatmap', sub: '當日資金流向：面積為成交金額、顏色為漲跌幅，依產業別切分板塊（資料源沒有全市場行情時以研究族群為範圍）。' },
-  grouprank: { title: '族群排名', eyebrow: 'Sector Strength Ranking', sub: '研究總覽各族群的盤中漲幅排名：排除低量個股並以 √成交金額加權，避免冷門股或單一權值股造成失真；隔日標示名次變動。' },
+  grouprank: { title: '族群排名', eyebrow: 'Sector Strength Ranking', sub: '研究總覽各族群的盤中漲幅排名：排除低量個股並以 √成交金額加權；同範圍且涵蓋一致時才比較升降名次。' },
   live: { title: '盤中雷達', eyebrow: 'Intraday Radar · Live Board', sub: '盤中定時掃描即時行情：族群與自選股即時走勢、爆量與急拉急殺、漲跌停與型態進場提醒，手機同步推播。' },
   overview: { title: '研究總覽', eyebrow: 'Research Matrix', sub: '從趨勢到證據，找到值得深入研究的公司。' },
   sectors: { title: '市場族群', eyebrow: 'Custom Groups', sub: '依你的族群分類研究，保留檔案順序與跨族群歸屬。' },

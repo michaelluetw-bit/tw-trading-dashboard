@@ -21,7 +21,7 @@ import { remoteConfig, isRemoteHost, verifyAccessJwt } from './lib/access.mjs';
 import { FUTURES, nearMonth, retailPosition, marginSummary, indexRow, assembleCard } from './lib/market-card.mjs';
 import { buildMarket, marketToday, WEIGHTS, FACTORS, minusDays, bars as priceBars } from './lib/engine.mjs';
 import { fetchStock, fetchNews, isBulkInstitutional, bulkInstitutions, defaultSources } from './lib/research.mjs';
-import { buildGroupRanking, compareRanks, quotesFromSnapshot, quotesFromReplay, quotesFromDaily, RANK_RULES } from './lib/grouprank.mjs';
+import { buildGroupRanking, quotesFromSnapshot, quotesFromStream, quotesFromReplay, quotesFromDaily, groupRankingRecord, historicalRanking } from './lib/grouprank.mjs';
 import { EMPTY_SCOPE, validateScope, scopeIds, resolveScope, addGroup, renameGroup, removeGroup, reorderGroups, addStock, removeStock, importGroups, selectedUpdateIds } from './lib/scope.mjs';
 import { patternSnapshot, clearPatterns, updatePatternData } from './lib/pattern-service.mjs';
 import { boardStream, streamBoardQuote, boardSpark, recordBoardMinute, boardStamp, validBoardQuote } from './lib/board-stream.mjs';
@@ -893,10 +893,14 @@ function grCloseQuotes(date){
   if(lastSnap?.date===date){const q=quotesFromSnapshot(lastSnap.rows,grMeta());if(grCover(q)>=.8)return q;}
   const q=quotesFromDaily(market().stocks,date);return grCover(q)>=.8?q:null;
 }
-function grPack(date,quotes,source){
-  const ranked=buildGroupRanking(researchScope.groups,quotes),prev=grPrev(date),times=[...quotes.values()].map(q=>q.time).filter(Boolean).sort();
-  const scope=new Set(researchScope.groups.flatMap(g=>g.stockIds));
-  return{date,source,asOf:times.at(-1)||null,builtAt:new Date().toISOString(),stocks:scope.size,quoted:[...scope].filter(id=>quotes.has(id)).length,rules:RANK_RULES,compare:prev?{date:prev.date}:null,groups:compareRanks(ranked,prev)};
+function grPack(date,quotes,source,meta={}){return groupRankingRecord(researchScope.groups,quotes,{date,source,previous:grPrev(date),...meta});}
+// 與看板共用本次連線、當日且已訂閱的資料；不開連線、不取快照。
+function shioajiRanking(pushed=shioajiBoard()){
+  if(!pushed)return null;
+  const quotes=quotesFromStream([...pushed.rows.values()],grMeta()),feed={...pushed.feed};
+  if(['live','partial'].includes(feed.status)){if(!quotes.size)feed.status='waiting';else if(quotes.size<pushed.rows.size)feed.status='partial';}
+  const pack=grPack(today(),quotes,'live',{provider:'shioaji',feed});
+  feed.quoted=pack.quoted;feed.asOf=pack.asOf;return pack;
 }
 // 最新一個交易日的快照列（盤中監控 15 秒內的資料直接沿用）
 async function latestSnapRows(){
@@ -906,11 +910,16 @@ async function latestSnapRows(){
   return{date,rows:all.filter(r=>String(r.date).slice(0,10)===date)};
 }
 async function queryGroupRank(force=false){
-  if(!force&&grLive.data&&Date.now()-grLive.at<10000)return grLive.data;
+  const pushed=shioajiBoard();
+  if(pushed){
+    if(!liveWindow()){const rec=read(`grouprank-${today()}.json`,null);if(rec?.date===today()){const pack=historicalRanking(rec);grLive={at:Date.now(),data:pack};return pack;}}
+    const pack=shioajiRanking(pushed);grLive={at:Date.now(),data:pack};return pack;
+  }
+  if(!force&&grLive.data&&grLive.data.provider!=='shioaji'&&Date.now()-grLive.at<10000)return grLive.data;
   // 非盤中且已有當日收盤紀錄時直接沿用
-  if(!liveWindow()){const last=grDates().at(-1),rec=last?read(`grouprank-${last}.json`,null):null;if(rec&&rec.date>=(lastSnap?.date||today())){grLive={at:Date.now(),data:rec};return rec;}}
+  if(!liveWindow()){const last=grDates().at(-1),rec=last?read(`grouprank-${last}.json`,null):null;if(rec&&rec.date>=(lastSnap?.date||today())){const pack=historicalRanking(rec);grLive={at:Date.now(),data:pack};return pack;}}
   const {date,rows}=await latestSnapRows();if(!rows.length)throw new UserError('目前取不到行情快照');
-  const pack=grPack(date,quotesFromSnapshot(rows,grMeta()),date===today()&&liveWindow()?'live':'close');
+  const pack=grPack(date,quotesFromSnapshot(rows,grMeta()),date===today()&&liveWindow()?'live':'close',{provider:data.pick('snapshot')?.id});
   grLive={at:Date.now(),data:pack};return pack;
 }
 setInterval(()=>{
@@ -1159,7 +1168,7 @@ function saveRemote(b){
   return remoteInfo();
 }
 // 資料源或金鑰變更後：重新評估可用因子、清除暫停狀態
-function providersChanged(){invalidate();calendarCache={date:'',dates:[]};monitorPauseUntil=0;monitorError='';kbarDenied={until:0,error:''};newsPauseUntil=0;}
+function providersChanged(){invalidate();grLive={at:0,data:null};calendarCache={date:'',dates:[]};monitorPauseUntil=0;monitorError='';kbarDenied={until:0,error:''};newsPauseUntil=0;}
 const keyText=(k,min=8)=>typeof k==='string'&&k.length>=min&&k.length<=10000&&!/\s/.test(k);
 async function saveProviderKey(id,key){
   const p=PROVIDERS[id];if(!p||p.key==='none')throw new UserError('此資料源不需要金鑰');
@@ -1216,7 +1225,7 @@ function importBundle(b,parts){
 }
 
 /* ---------- HTTP ---------- */
-const STATIC = { '/':'index.html', '/app.js':'app.js', '/heatmap.js':'heatmap.js', '/heat-feed.js':'heat-feed.js', '/briefing.js':'briefing.js','/flow-cards.js':'flow-cards.js', '/live.js':'live.js', '/quote-source.js':'quote-source.js', '/insight-ui.js':'insight-ui.js', '/report-card.js':'report-card.js', '/save-image.js':'save-image.js', '/prefs.js':'prefs.js', '/grouprank.js':'grouprank.js', '/i18n.js':'i18n.js', '/setup.js':'setup.js', '/market.js':'market.js', '/daytrade.js':'daytrade.js', '/intraday.js':'intraday.js', '/chipwatch.js':'chipwatch.js', '/hud.css':'hud.css', '/favicon.svg':'favicon.svg' };
+const STATIC = { '/':'index.html', '/app.js':'app.js', '/heatmap.js':'heatmap.js', '/heat-feed.js':'heat-feed.js', '/briefing.js':'briefing.js','/flow-cards.js':'flow-cards.js', '/live.js':'live.js', '/quote-source.js':'quote-source.js', '/group-rank-source.js':'group-rank-source.js', '/insight-ui.js':'insight-ui.js', '/report-card.js':'report-card.js', '/save-image.js':'save-image.js', '/prefs.js':'prefs.js', '/grouprank.js':'grouprank.js', '/i18n.js':'i18n.js', '/setup.js':'setup.js', '/market.js':'market.js', '/daytrade.js':'daytrade.js', '/intraday.js':'intraday.js', '/chipwatch.js':'chipwatch.js', '/hud.css':'hud.css', '/favicon.svg':'favicon.svg' };
 // 舊版模組丟出的一般錯誤（尚未改成 UserError）中，可以直接顯示的訊息
 const LEGACY_MESSAGE=/FinMind|金鑰|股票|族群|設定|格式|請|更新|無效|內容|行情|休市|公布|日期|查無|日報|雷達|時光機|畫格|分組|自選/;
 const server = http.createServer(async (req,res) => {
@@ -1453,7 +1462,9 @@ const server = http.createServer(async (req,res) => {
     }
     if(route==='/api/grouprank'&&req.method==='GET'){
       const dates=grDates();let date=url.searchParams.get('date');if(!date||date==='latest')date=dates.at(-1)||null;else if(!validHeatDate(date))throw new UserError('請選擇有效日期');
-      return json(res,200,{record:date?read(`grouprank-${date}.json`,null):null,dates:dates.slice(-30),live:grLive.data&&Date.now()-grLive.at<600e3?grLive.data:null});
+      let live=grLive.data&&Date.now()-grLive.at<600e3?grLive.data:null;
+      if(live?.provider==='shioaji'&&live.source==='live')live=shioajiRanking();
+      return json(res,200,{record:historicalRanking(date?read(`grouprank-${date}.json`,null):null),dates:dates.slice(-30),live});
     }
     /* ----- AI 盤後日報 ----- */
     if(route==='/api/report'&&req.method==='GET'){

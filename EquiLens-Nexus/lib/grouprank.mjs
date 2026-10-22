@@ -1,6 +1,7 @@
 import { activeMarket } from './config.mjs';
 import { closeHM } from './markets.mjs';
 import { framePrice, frameAmount, prevPrice } from './replay.mjs';
+import { createHash } from 'node:crypto';
 // 族群排名：研究總覽各族群成分股的盤中漲幅排名。
 // 避免失真：① 低量排除——成交金額低於族群總成交 0.5% 或低於 1,000 萬元者不計入分數（仍列出並標示）；
 // ② √成交金額加權——量大者影響較大，但不會讓單一權值股獨大，也不讓冷門股的極端漲幅左右族群。
@@ -45,6 +46,32 @@ export function quotesFromSnapshot(rows, meta) {
   const q = new Map();
   for (const r of rows) { const close = Number(r.close), ch = Number(r.change_price), amt = Number(r.total_amount); if (!(close > 0) || !Number.isFinite(ch) || close - ch <= 0) continue; q.set(r.stock_id, { name: meta.get(r.stock_id)?.name || r.stock_id, close, rate: r2(ch / (close - ch) * 100), amount: amt > 0 ? amt : 0, time: String(r.date).slice(0, 19) }); }
   return q;
+}
+// 推播排名必須有漲跌與成交額；缺值不能經 Number(null) 變成零漲跌。
+export function quotesFromStream(rows, meta) {
+  const finite = v => v != null && v !== '' && typeof v !== 'boolean' && Number.isFinite(Number(v));
+  return quotesFromSnapshot(rows.filter(r => [r.close,r.change_price,r.total_amount].every(finite) && Number(r.close) > 0 && Number(r.close)-Number(r.change_price) > 0 && Number(r.total_amount) > 0), meta);
+}
+const signature = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+// 比較依據只存於新紀錄；既有收盤檔不回寫、不推定當時的成分範圍。
+export function groupRankingRecord(groups, quotes, { date, source, previous = null, provider = null, feed = null, now = Date.now() } = {}) {
+  const usable = new Map([...quotes].filter(([,q])=>q && [q.close,q.rate,q.amount].every(Number.isFinite) && q.close>0 && q.amount>0));
+  const scope = groups.map(g => [g.id,[...new Set(g.stockIds)].sort()]).sort(([a],[b])=>a.localeCompare(b));
+  const ids = [...new Set(scope.flatMap(([,members])=>members))].sort(), quotedIds = ids.filter(id=>usable.has(id));
+  const scopeKey = signature(scope), coverageKey = signature(quotedIds);
+  const reason = !previous ? 'no-previous' : !previous.scopeKey || !previous.coverageKey ? 'unknown-scope' : previous.scopeKey !== scopeKey ? 'scope-changed' : previous.coverageKey !== coverageKey ? 'coverage-changed' : previous.rules?.minShare !== RANK_RULES.minShare || previous.rules?.minAmount !== RANK_RULES.minAmount ? 'rules-changed' : '';
+  const comparison = { compatible: !reason, reason, previousDate: previous?.date || null, previousQuoted: previous?.quoted ?? null, previousStocks: previous?.stocks ?? null };
+  const times = quotedIds.map(id=>usable.get(id).time).filter(Boolean).sort();
+  return { date, source, asOf:times.at(-1)||null, builtAt:new Date(now).toISOString(), stocks:ids.length, quoted:quotedIds.length, rules:RANK_RULES,
+    scope:'research', scopeKey, coverageKey, comparison, compare:previous?{date:previous.date}:null,
+    groups:compareRanks(buildGroupRanking(groups,usable),comparison.compatible?previous:null), ...(provider?{provider}:{}), ...(feed?{feed}: {}) };
+}
+export function historicalRanking(record) {
+  if (!record) return null;
+  const known = !!record.scopeKey && !!record.coverageKey && !!record.comparison;
+  if (known && record.comparison.compatible) return record;
+  return { ...record, comparison:known?record.comparison:{compatible:false,reason:'unknown-scope',previousDate:record.compare?.date||null,previousQuoted:null,previousStocks:null},
+    groups:(record.groups||[]).map(g=>({...g,prevRank:null,move:null})) };
 }
 // 研究名單本機日成交資料（TaiwanStockPrice：close、spread、Trading_money）→ quotes；時光機紀錄不完整時補建收盤紀錄，不需請求
 export function quotesFromDaily(stocks, date, market = activeMarket()) {
