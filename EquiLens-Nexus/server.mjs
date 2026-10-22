@@ -1,3 +1,5 @@
+import { finmindAccess, effectiveRetryAt } from './lib/finmind-access.mjs';
+import { createCredentialLifecycle } from './lib/finmind-lifecycle.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -46,7 +48,10 @@ const defaults = { weights: WEIGHTS, updateTime: '19:30', autoUpdate: true, inte
 const M=()=>activeMarket(), today=()=>marketToday(), clock=()=>localParts(M());
 const validId=id=>typeof id==='string'&&safeSymbol(id)&&M().symbolRe.test(id);
 // 資料源回報金鑰無效、額度用盡或方案不足：暫停自動請求一段時間
-const blocked=e=>['auth','quota','plan'].includes(e?.code);
+const blocked=e=>['auth','quota','plan','forbidden'].includes(e?.code);
+const fmAccess=finmindAccess();
+const fmRetry=(ops,local=0)=>effectiveRetryAt(fmAccess.view(),ops,local);
+const fmLife=createCredentialLifecycle({access:fmAccess,readSecret:()=>getSecret('finmind','FINMIND_API_TOKEN'),saveSecret:key=>saveSecret('finmind',key),deleteSecret:()=>deleteSecret('finmind'),validate:(...args)=>PROVIDERS.finmind.validate(...args),envManaged:()=>!!process.env.FINMIND_API_TOKEN});
 const idleJob=()=>({running:false,done:0,total:0,current:null,dataset:null,errors:[],message:t('尚未更新')});
 
 /* ---------- 狀態（切換市場時整組重新載入） ---------- */
@@ -166,7 +171,7 @@ function onSnapshot(rows,heat){
   try{runRadar(heat.date,streamFresh()?day.filter(r=>!streamRows.has(r.stock_id)):day);}catch(e){console.error(t('異動雷達失敗：')+e.message);}
 }
 setInterval(()=>{
-  if(settings.monitor===false||!liveWindow()||!data.has('snapshot')||Date.now()<monitorPauseUntil||livePending)return;
+  if(settings.monitor===false||!liveWindow()||!data.has('snapshot')||Date.now()<(data.source('snapshot')==='finmind'?fmRetry(['/taiwan_stock_tick_snapshot'],monitorPauseUntil):monitorPauseUntil)||livePending)return;
   if(liveHeat&&Date.now()-liveHeat.at<snapPlan().every-1500)return;
   liveHeatmap().catch(e=>{monitorError=e.message;if(e.code==='no-live')monitorPauseUntil=Date.now()+10*60e3;else if(blocked(e))monitorPauseUntil=Date.now()+30*60e3;});
 },2000).unref();
@@ -993,8 +998,8 @@ setInterval(()=>{
   newsBusy=true;
   scanNewsOnce().catch(e=>{newsStatus={...newsStatus,at:Date.now(),error:e.message};}).finally(()=>{newsBusy=false;});
 },5000).unref();
-const newsSources=()=>[...new Set(['finmind',data.has('marketNews')?data.source('marketNews'):null,...(cnyesOn()?['cnyes']:[])].filter(Boolean))].map(id=>newsSourceInfo(newsHealth,id,{enabled:normalizeNews(settings.news).enabled&&(id==='cnyes'?cnyesOn():data.has('marketNews')&&data.source('marketNews')===id)}));
-const newsInfo=()=>({...normalizeNews(settings.news),capable:data.has('marketNews')||cnyesOn(),sources:[data.has('marketNews')?data.source('marketNews'):null,cnyesOn()?'cnyes':null].filter(Boolean),status:{sources:newsSources(),at:newsStatus.at||null,error:newsStatus.error,found:newsStatus.found,seeded:newsStatus.seeded,today:alertsFor(today()).list.filter(a=>a.type==='news').length,pausedUntil:newsPauseUntil>Date.now()?newsPauseUntil:null}});
+const newsSources=()=>[...new Set(['finmind',data.has('marketNews')?data.source('marketNews'):null,...(cnyesOn()?['cnyes']:[])].filter(Boolean))].map(id=>newsSourceInfo(newsHealth,id,{enabled:normalizeNews(settings.news).enabled&&(id==='cnyes'?cnyesOn():data.has('marketNews')&&data.source('marketNews')===id),retryAt:id==='finmind'?fmRetry(['TaiwanStockNews:all']):0}));
+const newsInfo=()=>({...normalizeNews(settings.news),capable:data.has('marketNews')||cnyesOn(),sources:[data.has('marketNews')?data.source('marketNews'):null,cnyesOn()?'cnyes':null].filter(Boolean),status:{sources:newsSources(),at:newsStatus.at||null,error:newsStatus.error,found:newsStatus.found,seeded:newsStatus.seeded,today:alertsFor(today()).list.filter(a=>a.type==='news').length,pausedUntil:fmRetry(['TaiwanStockNews:all'],newsPauseUntil)>Date.now()?fmRetry(['TaiwanStockNews:all'],newsPauseUntil):null}});
 
 /* ---------- 推理模型 ---------- */
 // 金鑰以服務代號保存（anthropic、openai、gemini、compatible）；OpenAI 相容端點（例如本機模型）可不設金鑰
@@ -1166,7 +1171,7 @@ async function refreshPatternMarket(){
 function validateWeights(weights) { return weights && Object.keys(WEIGHTS).every(k => Number.isInteger(weights[k]) && weights[k] >= 0 && weights[k] <= 100) && Object.keys(WEIGHTS).reduce((s,k) => s + weights[k],0) === 100; }
 
 /* ---------- 設定：市場、語言、資料源、推理模型 ---------- */
-const providerStatus=()=>{const c=config(),info=providerInfo();return Object.values(PROVIDERS).map(p=>({id:p.id,name:t(p.name),site:p.site,docs:p.docs,markets:p.markets,key:p.key,keyEnv:p.keyEnv||null,configured:hasKey(p),enabled:c.providers.enabled.includes(p.id),supportsMarket:p.markets.includes(c.market),caps:Object.keys(CAPABILITIES).filter(cap=>supports(p,cap)),plan:info[p.id]?{plan:info[p.id].plan,tier:info[p.id].tier,checkedAt:info[p.id].checkedAt}:null}));};
+const providerStatus=()=>{const c=config(),info=providerInfo();return Object.values(PROVIDERS).map(p=>({id:p.id,name:t(p.name),site:p.site,docs:p.docs,markets:p.markets,key:p.key,keyEnv:p.keyEnv||null,configured:hasKey(p),...(p.id==='finmind'?{credential:fmAccess.view().credential,entitlement:fmAccess.view().entitlement,retryAt:fmRetry(Object.keys(fmAccess.view().operations)),accessOperations:fmAccess.view().operations,environmentManaged:!!process.env.FINMIND_API_TOKEN}:{}),enabled:c.providers.enabled.includes(p.id),supportsMarket:p.markets.includes(c.market),caps:Object.keys(CAPABILITIES).filter(cap=>supports(p,cap)),plan:info[p.id]?{plan:info[p.id].plan,tier:info[p.id].tier,checkedAt:info[p.id].checkedAt}:null}));};
 const llmStatus=()=>{const l=config().llm;return{...l,configured:llmConfigured(),providers:LLM_PROVIDERS.map(id=>({id,name:t(LLM_INFO[id].name),site:LLM_INFO[id].site,keyEnv:LLM_INFO[id].keyEnv,defaultModel:LLM_INFO[id].defaultModel,suggested:LLM_INFO[id].suggested||[],keyOptional:!!LLM_INFO[id].keyOptional,needsBaseUrl:!!LLM_INFO[id].needsBaseUrl,configured:secretConfigured(id,LLM_INFO[id].keyEnv)}))};};
 function configInfo(){
   const c=config();
@@ -1201,16 +1206,16 @@ function saveRemote(b){
   return remoteInfo();
 }
 // 資料源或金鑰變更後：重新評估可用因子、清除暫停狀態
-function providersChanged(){newsGeneration++;for(const s of Object.values(newsHealth))s.pausedUntil=null;invalidate();grLive={at:0,data:null};calendarCache={date:'',dates:[]};monitorPauseUntil=0;monitorError='';kbarDenied={until:0,error:''};newsPauseUntil=0;}
+function providersChanged(only=null){newsGeneration++;for(const [id,s] of Object.entries(newsHealth))if(!only||id===only)s.pausedUntil=null;invalidate();grLive={at:0,data:null};calendarCache={date:'',dates:[]};monitorPauseUntil=0;monitorError='';kbarDenied={until:0,error:''};newsPauseUntil=0;}
 const keyText=(k,min=8)=>typeof k==='string'&&k.length>=min&&k.length<=10000&&!/\s/.test(k);
 async function saveProviderKey(id,key){
   const p=PROVIDERS[id];if(!p||p.key==='none')throw new UserError('此資料源不需要金鑰');
   if(!keyText(key))throw new UserError('請輸入有效的金鑰');
   if(job.running)throw new UserError('請等待更新完成或停止後，再變更金鑰');
   // 以資料源的驗證端點測試金鑰並記錄方案等級；金鑰本身不會出現在網址、紀錄或回應中
-  const info=await p.validate(key);await saveSecret(p.id,key);setProviderInfo(p.id,info||{});
+  const info=id==='finmind'?await fmLife.replace(key):await p.validate(key);if(id!=='finmind')await saveSecret(p.id,key);setProviderInfo(p.id,info||{});
   const c=config();if(!c.providers.enabled.includes(p.id))saveConfig({providers:{...c.providers,enabled:[...c.providers.enabled,p.id]}});
-  providersChanged();return info;
+  providersChanged(id==='finmind'?'finmind':null);return info;
 }
 async function saveLlmKey(provider,key,baseUrl){
   const info=LLM_INFO[provider];if(!info)throw new UserError('不支援的推理模型服務：{provider}',{provider});
@@ -1300,16 +1305,17 @@ const server = http.createServer(async (req,res) => {
       if(!Array.isArray(b.enabled)||b.enabled.length>20||!b.enabled.every(id=>PROVIDERS[id])||new Set(b.enabled).size!==b.enabled.length)throw new UserError('資料源設定格式錯誤');
       const prefer=b.prefer&&typeof b.prefer==='object'?b.prefer:{};
       if(!Object.entries(prefer).every(([k,v])=>CAPABILITIES[k]&&PROVIDERS[v]))throw new UserError('資料源設定格式錯誤');
-      saveConfig({providers:{enabled:b.enabled,prefer}});providersChanged();return json(res,200,{ok:true,...configInfo()});
+      saveConfig({providers:{enabled:b.enabled,prefer}});if(b.enabled.includes('finmind'))await fmLife.retryOperations();providersChanged();return json(res,200,{ok:true,...configInfo()});
     }
+    if(route==='/api/finmind-access'&&req.method==='POST'){const b=await body(req);if(b.action!=='disable')throw new UserError('設定無效');await fmLife.disable();providersChanged('finmind');return json(res,200,{ok:true,...configInfo()});}
     if(route==='/api/provider-key'&&req.method==='POST'){
       const b=await body(req);
-      if(b.remove){if(!PROVIDERS[b.id])throw new UserError('資料源設定格式錯誤');await deleteSecret(b.id);providersChanged();return json(res,200,{ok:true,...configInfo()});}
+      if(b.remove){if(!PROVIDERS[b.id])throw new UserError('資料源設定格式錯誤');if(b.id==='finmind')await fmLife.remove();else await deleteSecret(b.id);providersChanged(b.id==='finmind'?'finmind':null);return json(res,200,{ok:true,...configInfo()});}
       const info=await saveProviderKey(b.id,b.key);return json(res,200,{ok:true,plan:info?{plan:info.plan,tier:info.tier}:null,...configInfo()});
     }
     if(route==='/api/provider-check'&&req.method==='POST'){ // 重新驗證已保存的金鑰（例如續訂付費方案後）
       const b=await body(req),p=PROVIDERS[b.id];if(!p||p.key==='none'||!hasKey(p))throw new UserError('請先設定此資料源的金鑰');
-      const info=await p.validate(await getSecret(p.id,p.keyEnv));setProviderInfo(p.id,info||{});providersChanged();return json(res,200,{ok:true,...configInfo()});
+      const info=p.id==='finmind'?await fmLife.recheck():await p.validate(await getSecret(p.id,p.keyEnv));setProviderInfo(p.id,info||{});providersChanged(p.id==='finmind'?'finmind':null);return json(res,200,{ok:true,...configInfo()});
     }
     if(route==='/api/llm'&&req.method==='POST'){
       const b=await body(req),l=config().llm;
@@ -1345,7 +1351,7 @@ const server = http.createServer(async (req,res) => {
       await saveLlmKey('anthropic',b.key);return json(res,200,{ok:true});
     }
     /* ----- 盤中監控、雷達、看板、時光機 ----- */
-    if(route==='/api/monitor'&&req.method==='GET')return json(res,200,{enabled:settings.monitor!==false,snapshot:{provider:data.pick('snapshot')?.id||null,error:monitorError,asOf:liveHeat?.data?.asOf||null},capable:data.has('snapshot'),mode:data.snapshotMode(),every:snapPlan().every,window:liveWindow(),lastAt:liveHeat?.at||null,asOf:liveHeat?.data?.asOf||null,error:monitorError,pausedUntil:monitorPauseUntil>Date.now()?monitorPauseUntil:null,radar:normalizeRadar(settings.radar),replayDays:listDays(),news:newsInfo(),stream:streamInfo()});
+    if(route==='/api/monitor'&&req.method==='GET')return json(res,200,{enabled:settings.monitor!==false,snapshot:{provider:data.pick('snapshot')?.id||null,error:monitorError,asOf:liveHeat?.data?.asOf||null},capable:data.has('snapshot'),mode:data.snapshotMode(),every:snapPlan().every,window:liveWindow(),lastAt:liveHeat?.at||null,asOf:liveHeat?.data?.asOf||null,error:monitorError,pausedUntil:(data.source('snapshot')==='finmind'?fmRetry(['/taiwan_stock_tick_snapshot'],monitorPauseUntil):monitorPauseUntil)>Date.now()?(data.source('snapshot')==='finmind'?fmRetry(['/taiwan_stock_tick_snapshot'],monitorPauseUntil):monitorPauseUntil):null,radar:normalizeRadar(settings.radar),replayDays:listDays(),news:newsInfo(),stream:streamInfo()});
     if(route==='/api/news/settings'&&req.method==='POST'){
       const b=await body(req);if(!validNewsInput(b))throw new UserError('新聞推播設定格式錯誤');
       const was=normalizeNews(settings.news).enabled;settings={...settings,news:normalizeNews(b)};saveSettings();
