@@ -1,4 +1,5 @@
-import { boardFeedNotice, snapshotErrorNotice, quoteProviderName, boardUnavailableLabel, boardRequestFailed, createBoardLoader } from './quote-source.js';
+import { newsSourcesHTML } from './news-source.js';
+import { boardFeedNotice, snapshotErrorNotice, quoteProviderName, boardUnavailableLabel, boardRequestFailed, createBoardLoader, currentChartResponse, chartRequestFailed, createChartLoader, priceRulesRequestFailed, currentPriceRulesResponse, preserveRuleDraft } from './quote-source.js';
 import { groupRankNotice, canCompareGroupRank, currentGroupRank, groupRankFailed, createGroupRankLoader } from './group-rank-source.js';
 // 衡析 Pocket：盤中分頁（族群／自選即時看板、異動雷達、族群排名、雷達設定）、個股 K 線、熱浪時光機、個股籌碼深度、AI 盤後日報、推播訂閱。
 import { esc, fmt, pct, cls, sparkSVG, candleSVG, brokerHTML, holderHTML, warrantHTML, warrantBrokersHTML, alertRow, alertMatch, isMove, ALERT_GROUPS, reportHTML, rotationData, rotationSVG, replayStocks, priceRuleForm, priceRulesHTML, priceRuleBody } from './insight-ui.js';
@@ -44,13 +45,14 @@ setInterval(async () => {
   if (!C || document.hidden) return;
   const S = C.S;
   if (S.tab === 'live' && (marketOpen() || Date.now() - L.boardAt > 60000)) { await Promise.all([loadBoard(), loadAlerts(), L.view === 'daytrade' || Date.now() - DT.at > 300e3 ? loadDaytrade() : null]); if (S.tab === 'live' && !sheetOpen()) redrawLive(); }
+  if (sheetOpen() && C.$('#news-set')) { await loadMonitor(); const el=C.$('#news-set');if(el)el.outerHTML=newsSettingsCard(); }
   if (S.tab === 'brief' && L.report?.busy) { await loadReport(); if (S.tab === 'brief') C.draw(); }
   if (S.tab === 'live' && marketOpen() && ++streamTick % 3 === 0) await refreshStream(); // 盤中每 30 秒確認即時推播狀態
 }, 10000);
 // 即時推播（例如富果 WebSocket）運作時，盤中分頁的看板與異動每 3 秒更新
 let streamTick = 0;
 const streamOn = () => L.board?.provider==='shioaji' || !!L.monitor?.stream?.active;
-async function refreshStream() { try { const m = await C.api('api/monitor'); if (L.monitor) { L.monitor.stream = m.stream; L.monitor.error = m.error; L.monitor.snapshot = m.snapshot; } } catch { } }
+async function refreshStream() { try { const m = await C.api('api/monitor'); if (L.monitor) { L.monitor.stream = m.stream; L.monitor.error = m.error; L.monitor.snapshot = m.snapshot; L.monitor.news = m.news; } } catch { } }
 setInterval(async () => {
   if (!C || document.hidden || C.S.tab !== 'live' || !streamOn() || !marketOpen()) return;
   await Promise.all([L.board?.provider==='shioaji'?loadBoard():null,L.view === 'daytrade' ? loadDaytrade() : null, loadAlerts()]);
@@ -150,14 +152,17 @@ function radarView() {
   return pushCard + chips + `<section class="card ix-alerts">${list.map(alertRow).join('') || `<div class="empty">${marketOpen() ? '目前沒有符合條件的異動。' : '今日尚無異動紀錄。開盤後雷達會自動掃描。'}</div>`}</section>`;
 }
 /* ---------- 自訂提醒 ---------- */
-async function loadRules() { try { L.rules = await C.api('api/price-alerts'); } catch (e) { if (!e.silent) L.error = e.message; } }
+const loadRuleState=createChartLoader({request:()=>C.api('api/price-alerts'),receive:info=>{L.rules=currentPriceRulesResponse(info,MK.today());},fail:e=>{L.rules=priceRulesRequestFailed(L.rules);if(!e.silent)L.error=e.message;},timeoutMessage:'提醒狀態連線逾時，等待恢復'});
+function loadRules() {return loadRuleState({resource:'price-alerts'});}
+setInterval(async()=>{if(!C||document.hidden||!document.querySelector('[data-pa-box]'))return;await loadRules();paintRules();},10000);
 function paintRules() {
   for (const el of document.querySelectorAll('[data-pa-box]')) el.innerHTML = priceRulesHTML(L.rules, { stockId: el.dataset.paBox || null, empty: el.dataset.paBox ? '這檔股票尚未設定提醒' : '尚未設定提醒' });
+  for (const el of document.querySelectorAll('[data-pa-count]')) el.textContent=`${(L.rules?.rules||[]).filter(r=>r.active).length} / ${L.rules?.max||200}`;
 }
 function rulesView() {
   if (!L.rules) { loadRules().then(() => C.S.tab === 'live' && L.view === 'rules' && C.draw()); return '<div class="empty"><span class="spinner"></span> 讀取中…</div>'; }
   const on = L.rules.rules.filter(r => r.active).length;
-  return `<section class="card"><div class="card-h"><h2>🔔 自訂提醒<small>啟用 ${on} / ${L.rules.max}</small></h2></div><div class="card-b"><div data-pa-box="">${priceRulesHTML(L.rules, { empty: '尚未設定提醒' })}</div>${priceRuleForm()}</div></section>
+  return `<section class="card"><div class="card-h"><h2>🔔 自訂提醒<small>啟用 <span data-pa-count>${on} / ${L.rules.max}</span></small></h2></div><div class="card-b"><div data-pa-box="">${priceRulesHTML(L.rules, { empty: '尚未設定提醒' })}</div>${priceRuleForm()}</div></section>
   <p class="foot">價格、漲跌幅或預估量達到條件時推播到手機（需在「雷達」開啟通知）。單次提醒觸發後自動停用，可按 ▶ 重新啟用；重複提醒在條件解除後再次成立時提醒。也可以在個股或 K 線頁設定。</p>`;
 }
 // 個股頁與 K 線頁的提醒區塊
@@ -192,33 +197,31 @@ async function openChart(id, period = K.period, group = K.group) {
   if (!shown) C.openSheet(L.board?.stocks.find(x => x.id === id)?.name || id, '');
   paintChart(); await refreshChart();
 }
-async function refreshChart() {
-  const id = K.id, period = K.period, seq = ++K.seq;
-  try {
-    if (period === 'live') { const d = await C.api(`api/intraday?id=${id}${K.group ? '&group=' + encodeURIComponent(K.group) : ''}`); if (seq !== K.seq) return; K.live = d; K.error = ''; }
-    else { const d = await C.api(`api/chart?id=${id}&period=${period}`); if (seq !== K.seq) return; K.data = d; K.error = ''; }
-  }
-  catch (e) { if (seq !== K.seq || e.silent) return; K.error = e.message; }
-  if (chartShown(id)) paintChart();
-}
+const loadChart=createChartLoader({
+  request:({id,period,group})=>C.api(period==='live'?`api/intraday?id=${id}${group?'&group='+encodeURIComponent(group):''}`:`api/chart?id=${id}&period=${period}`),
+  receive:(d,intent)=>{if(intent.period==='live')K.live=d;else K.data=currentChartResponse(d,MK.today());K.error='';if(chartShown(intent.id))preserveRuleDraft(C.$('#sheet-body'),paintChart);},
+  fail:(e,intent)=>{K.data=chartRequestFailed(K.data);if(!e.silent)K.error=e.message;if(chartShown(intent.id))preserveRuleDraft(C.$('#sheet-body'),paintChart);}
+});
+function refreshChart() {return loadChart({id:K.id,period:K.period,group:K.group});}
+
 setInterval(() => { if (C && K.id && K.period !== 'live' && marketOpen() && !document.hidden && chartShown(K.id)) refreshChart(); }, 10000);
 // 即時走勢每 3 秒更新（盤中、畫面開著時）
 setInterval(() => { if (C && K.id && K.period === 'live' && marketOpen() && !document.hidden && chartShown(K.id)) refreshChart(); }, 3000);
 function paintChart() {
   if (K.period === 'live') return paintIntraday();
-  const id = K.id, d = K.data?.id === id ? K.data : null, s = L.board?.stocks.find(x => x.id === id), body = C.$('#sheet-body');
-  const ready = d && d.period === K.period, q = d?.quote ?? s?.quote, dayBar = d?.session || null;
-  const price = q?.close ?? dayBar?.[4] ?? d?.daily?.price ?? s?.daily?.price, chg = q?.change ?? d?.daily?.change ?? s?.daily?.change;
+  const id = K.id, d = K.data?.id === id ? currentChartResponse(K.data,MK.today()) : null, s = L.board?.stocks.find(x => x.id === id), body = C.$('#sheet-body');
+  const ready = d && d.period === K.period, q = d ? d.quote : s?.quote, dayBar = d?.provider==='shioaji'?null:d?.session || null;
+  const price = d?.provider==='shioaji'?q?.close:q?.close ?? dayBar?.[4] ?? d?.daily?.price ?? s?.daily?.price, chg = d?.provider==='shioaji'?q?.change:q?.change ?? d?.daily?.change ?? s?.daily?.change;
   const live = d?.live && marketOpen(), info = [q?.open ?? dayBar?.[1], q?.high ?? dayBar?.[2], q?.low ?? dayBar?.[3]];
   // 依畫面寬度決定圖寬與根數（摺疊螢幕展開時顯示更多 K 棒）
   const w = Math.round(Math.max(300, Math.min(900, (body?.clientWidth || 360) - 30))), h = Math.round(Math.min(400, Math.max(250, w * .72)));
   const chart = K.error && !ready ? `<div class="notice err">${esc(K.error)}</div>` : ready ? candleSVG(d.bars, { w, h, show: Math.round(w / (d.period === 'day' ? 6 : 5)), period: d.period, key: id + d.period, prev: d.prev, prevs: d.days ? Object.fromEntries(d.days.map(x => [x.date, x.prev])) : null }) : `<div class="empty"><span class="spinner"></span> 讀取${K.period === 'day' ? '日' : ' 5 分'} K…</div>`;
-  const caption = !ready ? '' : d.period === 'day' ? `日 K（不還原）${d.today ? ` · 最後一根為 ${md(d.today)} ${live ? '即時' : '當日'}資料` : ''} · 左右滑動或點圖查看各根數值`
+  const caption = !ready ? '' : d.period === 'day' ? `日 K（不還原）${d.todayProvisional?' · Shioaji 當日暫估（非正式收盤）':''}${d.today ? ` · 最後一根為 ${md(d.today)} ${live ? '即時' : '當日'}資料` : ''} · 左右滑動或點圖查看各根數值`
     : `${d.notice ? `<span class="amber">⚠ ${esc(d.notice)}</span><br>` : ''}5 分 K · ${d.days.map(x => md(x.date)).join('、')}${d.days.some(x => x.source === 'replay') ? ' · 盤中以每分鐘快照組成，高低點為近似值，收盤後改用資料源的分 K' : ''} · 左右滑動或點圖查看各根數值`;
   C.$('#sheet-title').innerHTML = `${esc(d?.name || s?.name || id)}<small>${id}${d?.sector ? ' · ' + esc(d.sector) : ''}</small>`;
   body.innerHTML = `<div data-chart="${id}"><div class="hero"><div><div class="big num ${cls(chg)}">${fmt(price, 2)}</div><div class="num ${cls(chg)}" style="font-weight:700">${pct(chg)}${q?.changePrice != null ? ` · ${q.changePrice > 0 ? '+' : ''}${fmt(q.changePrice, 2)}` : ''}</div>
     <div class="meta num">開 ${fmt(info[0], 2)} · 高 ${fmt(info[1], 2)} · 低 ${fmt(info[2], 2)}<br>${q?.volume ? `成交 ${fmt(q.volume)} 張` : dayBar ? `成交 ${fmt(dayBar[5])} 張` : ''}${q?.amount ? ` · ${yi(q.amount)} 億` : ''}${q?.bid ? ` · 委買 ${fmt(q.bid, 2)}／委賣 ${fmt(q.ask, 2)}` : ''}</div></div></div>
-    <div class="statusline">${live ? `<span class="pill"><span class="dot live"></span>盤中 · 每 10 秒更新 ${esc(q?.time || '')}</span>` : q?.date ? `<span class="pill">${md(q.date)} ${esc(q.time || '')}</span>` : ''}</div>
+    <div data-chart-source>${d?.feed?boardFeedNotice(d.feed):''}${d?.provider==='shioaji'&&!q?esc(boardUnavailableLabel(d.status||d.feed?.status)):''}</div><div class="statusline">${live ? `<span class="pill"><span class="dot live"></span>盤中 · 每 10 秒更新 ${esc(q?.time || '')}</span>` : q?.date ? `<span class="pill">${md(q.date)} ${esc(q.time || '')}</span>` : ''}</div>
     <div class="seg" style="margin-bottom:10px">${PERIODS.map(([v, l]) => `<button class="${K.period === v ? 'on' : ''}" data-cperiod="${v}">${l}</button>`).join('')}</div>
     <section class="card"><div class="card-b">${chart}${caption ? `<p class="ix-foot">${caption}</p>` : ''}</div></section>
     <div class="upd-row">${C.inScope(id) ? `<button class="btn primary" data-stock-detail="${id}">個股診斷</button>` : '<span></span>'}<button class="btn" data-chart-refresh>⟳ 重新整理</button></div>${rulesCard({ id, name: d?.name || s?.name || id, close: price })}</div>`;
@@ -295,12 +298,12 @@ const hhmmss = ms => MK.parts(ms).hm;
 export function newsSettingsCard() {
   if (!L.monitor) { loadMonitor().then(() => { const el = C.$('#news-set'); if (el) el.outerHTML = newsSettingsCard(); }); return '<section class="card" id="news-set"><div class="card-b"><span class="spinner"></span> 讀取新聞推播設定…</div></section>'; }
   const n = L.monitor.news || { enabled: false, scope: 'all', quiet: false }, s = n.status || {};
-  const status = !n.enabled ? '目前關閉' : s.error ? `⚠ ${esc(s.error)}` : s.at ? `上次掃描 ${hhmmss(s.at)} · 今日新聞 ${s.today || 0} 則` : '即將開始第一次掃描';
+  const status = !n.enabled ? '目前關閉' : s.error && !s.sources?.length ? `⚠ ${esc(s.error)}` : s.at ? `上次掃描 ${hhmmss(s.at)} · 今日新聞 ${s.today || 0} 則` : '即將開始第一次掃描';
   return `<section class="card" id="news-set"><div class="card-h"><h2>🗞️ 新聞推播</h2></div><div class="card-b">
     <div class="lv-rule"><label class="lv-sw"><input type="checkbox" data-npush="enabled" ${n.enabled ? 'checked' : ''}><span></span></label><div><b>新聞推播</b><small>每分鐘掃描一次研究族群成分股的個股新聞（FinMind＋台股的鉅亨網），有新新聞立即推播（點通知直接開原文）。論壇貼文與重複轉載會自動略過；剛開啟時，已有的新聞只記錄不推播。</small></div></div>
     <div class="lv-rule"><div style="flex:1"><b>推播範圍</b><div class="seg" style="margin-top:8px">${[['all', '全部研究族群'], ['watch', '只推自選股']].map(([v, l]) => `<button class="${n.scope === v ? 'on' : ''}" data-npush-scope="${v}">${l}</button>`).join('')}</div></div></div>
     <div class="lv-rule"><label class="lv-sw"><input type="checkbox" data-npush="quiet" ${n.quiet ? 'checked' : ''}><span></span></label><div><b>夜間勿擾</b><small>23:00–07:00 只記錄到雷達、不推播</small></div></div>
-    <p class="set-p muted">狀態：${status}${L.push.state !== 'on' ? `<br>${['unsupported', 'denied'].includes(L.push.state) ? pushHelp(L.push.state) : '這支手機的通知尚未開啟：請到「盤中 → 雷達」按「開啟通知」'}` : ''}</p></div></section>`;
+    <p class="set-p muted">狀態：${status}${newsSourcesHTML(n,{t:tx,time:ms=>MK.dateTime(ms)})}${L.push.state !== 'on' ? `<br>${['unsupported', 'denied'].includes(L.push.state) ? pushHelp(L.push.state) : '這支手機的通知尚未開啟：請到「盤中 → 雷達」按「開啟通知」'}` : ''}</p></div></section>`;
 }
 async function saveNews(patch) {
   const cur = L.monitor?.news || { enabled: false, scope: 'all', quiet: false };

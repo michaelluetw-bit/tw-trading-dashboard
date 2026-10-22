@@ -1,3 +1,4 @@
+import { quoteProviderName, boardUnavailableLabel } from './quote-source.js';
 // 電腦版與手機版共用的圖表與卡片產生器（兩邊各放一份相同檔案）。顏色一律取 CSS 變數，深淺主題自動適用。
 import * as MK from './market.js';
 export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -197,7 +198,7 @@ export function priceRulesHTML(info, { stockId = null, empty = '尚未設定提�
   const rules = (info?.rules || []).filter(r => !stockId || r.stockId === stockId);
   if (!rules.length) return `<p class="ix-empty">${empty}</p>`;
   return `<div class="ix-pa-list">${rules.map(r => `<div class="ix-pa-row ${r.active ? '' : 'off'}">${stockId ? '' : `<button class="ix-pa-stock" data-alert-stock="${esc(r.stockId)}"><b>${esc(r.name)}</b><small class="num">${esc(r.stockId)}</small></button>`}
-    <span class="ix-pa-cond"><b>${esc(r.label)}</b>${r.repeat ? '<em class="ix-badge acc">重複</em>' : ''}${!r.active ? '<em class="ix-badge">已停用</em>' : ''}${r.note ? `<small>${esc(r.note)}</small>` : ''}<small class="num">${r.close != null ? `現價 ${fmt(r.close, 2)}（${pct(r.change)}）` : ''}${r.firedAt ? `${r.close != null ? ' · ' : ''}上次提醒 ${esc(MK.dateTime(r.firedAt))} · 共 ${r.hits} 次` : ''}</small></span>
+    <span class="ix-pa-cond"><b>${esc(r.label)}</b>${r.repeat ? '<em class="ix-badge acc">重複</em>' : ''}${!r.active ? '<em class="ix-badge">已停用</em>' : ''}${r.note ? `<small>${esc(r.note)}</small>` : ''}<small class="num">${r.provider?`<small data-rule-source>${esc(quoteProviderName(r.provider))} · ${esc(r.asOf||boardUnavailableLabel(r.status))}</small>`:''}${r.close != null ? `現價 ${fmt(r.close, 2)}（${pct(r.change)}）` : ''}${r.firedAt ? `${r.close != null ? ' · ' : ''}上次提醒 ${esc(MK.dateTime(r.firedAt))} · 共 ${r.hits} 次` : ''}</small></span>
     <span class="ix-pa-act"><button data-pa-toggle="${esc(r.id)}" data-on="${r.active ? '0' : '1'}" title="${r.active ? '停用' : '重新啟用'}">${r.active ? '⏸' : '▶'}</button><button data-pa-del="${esc(r.id)}" title="刪除" aria-label="刪除提醒">✕</button></span></div>`).join('')}</div>`;
 }
 // 表單內容 → API 參數

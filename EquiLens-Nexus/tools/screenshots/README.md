@@ -44,3 +44,11 @@ Nexus/Pocket 分別使用 4391/4392，手機示意密碼同上。執行 `PLAYWRI
 Nexus 使用 `EQUITY_DATA_DIR=<示意目錄> PORT=4391 DEMO_TIME=2026-10-22T10:00:00+08:00 SHIOAJI_BRIDGE_TOKEN=offline-test FINMIND_API_TOKEN=offline-test node --import ./tests/helpers/group-rank-offline.mjs server.mjs`。Pocket 使用獨立 `MOBILE_DATA_DIR`、`NEXUS_URL=http://127.0.0.1:4391` 與 4392；示意密碼為上面的 `demo-password-123`。兩版不要設定正式金鑰。
 
 執行 `PLAYWRIGHT=<playwright/index.mjs> node tools/screenshots/capture-group-rank-stream.mjs <輸出目錄>`。工具驗證來源／時間／涵蓋、舊檔不顯示升降、斷線清空、API 失敗與 10 秒逾時、跨日延遲回應、恢復與歷史查閱。斷線及 HTTP 失敗使用測試瀏覽器攔截模擬；正常數字來自離線推播。200 檔上限、201 檔部分涵蓋、零成交額與來源切換由 API／單元測試驗證。
+
+## 有效行情與新聞來源狀態
+
+在獨立示意目錄先執行 `demo-data.mjs`、`demo-data2.mjs`、`group-rank-demo.mjs`，再執行 `quote-news-demo.mjs`。最後一步補合成 OHLCV、日 K 快取與新聞來源歷史，不得對正式資料目錄使用。
+
+Nexus 的 4391 測試站使用 `tests/helpers/quote-news-offline.mjs`，其餘離線環境變數同上一節；Pocket 使用獨立 4392 與示意密碼。測試模組取代 WebSocket、FinMind 與鉅亨 HTTP，沒有實際券商連線。
+
+執行 `PLAYWRIGHT=<playwright/index.mjs> node tools/screenshots/capture-quote-news.mjs <輸出目錄>`。工具驗證兩版圖表暫估標示、來源時間、503、10 秒逾時、斷線清值、恢復，以及新聞來源狀態更新。輸出 `desktop-news-source-status.png` 與 `mobile-news-source-status.png` 為設定卡片，`*-valid-quote-chart.png` 為當日補值示意。將需要的 PNG 複製到 `docs/images/`；不得使用正式帳戶畫面。
