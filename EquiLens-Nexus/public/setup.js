@@ -19,7 +19,7 @@ const PROVIDER_NOTES = {
   finmind: '台股資料最完整：日 K、還原股價、法人、營收、本益比、新聞、股權分散、期貨；Sponsor 方案另有盤中即時快照、分 K、全市場單日資料、券商分點，以及當沖監控用的可當沖標的、暫停交易與參考價。',
   twse: '證交所與櫃買中心的官方開放資料，免金鑰：股票清單、交易日曆、日 K、全市場單日行情、法人（全市場逐日）、本益比、月營收。沒有盤中即時資料與還原股價。',
   fugle: '富果行情 API：台股日 K（含還原股價）、分 K，以及盤中雷達與當沖監控用的 WebSocket 即時推播。訂閱數（1 檔 × 1 個頻道）：基本 5、開發者 300、進階 2,000；當沖完整模式每檔訂閱逐筆成交、分 K、五檔 3 個頻道，訂閱不足時改用聚合行情（每檔 1 個，自選股優先）。付費方案另有全市場即時快照。啟用後熱浪圖、時光機等其他資料仍依原本的資料源。',
-  shioaji: '永豐金 Shioaji 即時行情：經這台電腦上的行情轉接服務（sj-trading 的 sj-quote-bridge），提供盤中雷達、研究範圍熱浪圖與自訂提醒用的即時推播。只有精簡模式（每檔 1 個訂閱，上限 200 檔），沒有日 K、分 K 與快照；當沖監控只有精簡模式，五檔錄製器不加錄。轉接服務使用只有行情權限的永豐金金鑰，不能下單。這裡填的是轉接服務的本機通行碼，不是永豐金金鑰。',
+  shioaji: '永豐金 Shioaji 即時行情：經這台電腦上的行情轉接服務（sj-trading 的 sj-quote-bridge），提供盤中雷達、即時看板、研究範圍熱浪圖與自訂提醒用的即時推播。只有精簡模式（每檔 1 個訂閱，上限 200 檔），沒有日 K、分 K 與快照；當沖監控只有精簡模式，五檔錄製器不加錄。轉接服務使用只有行情權限的永豐金金鑰，不能下單。這裡填的是轉接服務的本機通行碼，不是永豐金金鑰。',
   twelvedata: '涵蓋全球多數市場：股票清單、日 K、即時報價、分 K（免費方案每分鐘 8 次、每日 800 次）。',
   alphavantage: '以美股為主（另支援英、加、德、印）：日 K、報價、新聞情緒、本益比、季營收（免費方案每日 25 次）。',
 };
@@ -31,7 +31,7 @@ const LLM_NOTES = {
 };
 // 功能 → 需要的資料能力（設定精靈的「目前可用功能」清單）
 const FEATURES = [
-  ['研究評分與日 K', ['daily']], ['盤中雷達與即時看板', ['snapshot']], ['盤中雷達即時推播', ['stream']], ['當沖監控（逐筆、分 K、五檔）', ['stream']], ['當沖資格與參考價', ['dayTrade']], ['資金熱浪（全市場）', ['dailyAll']], ['型態選股（全市場）', ['dailyAll']],
+  ['研究評分與日 K', ['daily']], ['盤中即時看板', ['snapshot'], 'board'], ['盤中雷達即時推播', ['stream']], ['當沖監控（逐筆、分 K、五檔）', ['stream']], ['當沖資格與參考價', ['dayTrade']], ['資金熱浪（全市場）', ['dailyAll']], ['型態選股（全市場）', ['dailyAll']],
   ['5 分 K', ['intraday']], ['法人籌碼分數', ['institutional']], ['營收成長', ['revenue']], ['本益比', ['valuation']], ['新聞推播', ['marketNews']],
   ['券商分點', ['brokers']], ['法人／期貨籌碼總覽', ['flows']],
 ];
@@ -51,7 +51,7 @@ function providerList(cfg) {
 }
 function featureList(cfg) {
   const caps = cfg.capabilities, local = cfg.market.local || [];
-  return `<ul class="setup-features">${FEATURES.filter(([, need]) => !need.some(c => ['brokers', 'flows'].includes(c)) || local.includes(need[0])).map(([name, need]) => { const src = need.map(c => caps[c]).find(Boolean); return `<li class="${src ? 'ok' : 'no'}"><span>${src ? '✓' : '—'}</span>${esc(name)}${src ? ` <small class="muted" translate="no">${esc(cfg.providers.find(p => p.id === src)?.name || src)}</small>` : ''}</li>`; }).join('')}</ul>`;
+  return `<ul class="setup-features">${FEATURES.filter(([, need]) => !need.some(c => ['brokers', 'flows'].includes(c)) || local.includes(need[0])).map(([name, need, kind]) => { const src = kind==='board'&&caps.stream==='shioaji'?'shioaji':need.map(c => caps[c]).find(Boolean); return `<li class="${src ? 'ok' : 'no'}"><span>${src ? '✓' : '—'}</span>${esc(name)}${src ? ` <small class="muted" translate="no">${esc(cfg.providers.find(p => p.id === src)?.name || src)}</small>` : ''}</li>`; }).join('')}</ul>`;
 }
 function preferPanel(cfg) {
   const enabled = cfg.providers.filter(p => p.enabled && p.supportsMarket);

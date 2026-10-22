@@ -24,6 +24,7 @@ import { fetchStock, fetchNews, isBulkInstitutional, bulkInstitutions, defaultSo
 import { buildGroupRanking, compareRanks, quotesFromSnapshot, quotesFromReplay, quotesFromDaily, RANK_RULES } from './lib/grouprank.mjs';
 import { EMPTY_SCOPE, validateScope, scopeIds, resolveScope, addGroup, renameGroup, removeGroup, reorderGroups, addStock, removeStock, importGroups, selectedUpdateIds } from './lib/scope.mjs';
 import { patternSnapshot, clearPatterns, updatePatternData } from './lib/pattern-service.mjs';
+import { boardStream, streamBoardQuote, boardSpark, recordBoardMinute, boardStamp, validBoardQuote } from './lib/board-stream.mjs';
 import { createStreamPool, planStream } from './lib/stream.mjs';
 import { normalizeBooks, checkpoints, buildLiquidity, reduceDay, pickExtras, swapExtras, createBookRecorder, readMeta, writeMeta, compactDay, listBookDays, pruneDays, readStock, toCSV, exportDay } from './lib/bookrec.mjs';
 import { createDayTrade, buildBaseline, normalizeDaytrade, roundTripCost, tzOffset, evaluateSignal, reviewStats, signalTitle, DT_TITLES } from './lib/daytrade.mjs';
@@ -58,7 +59,7 @@ let stream=null,streamState={provider:null,connected:false,symbols:0,subscribed:
 let dt=null,dtMeta=new Map(),dtPrep={date:'',busy:false,data:null,at:0},dtSaved='',dtFallback='',backfill={busy:false,again:false,started:0,done:0,total:0,error:''};
 const dtHistory=createHistoryLoader({read,write:(name,value)=>{fs.mkdirSync(path.join(LOCAL,'daytrade-history'),{recursive:true});write(name,value);},fetchHistory:(...args)=>data.streamHistory(...args)});
 let subscribedIds=new Set();
-let heatSessionRows=new WeakSet();
+let streamSessionRows=new WeakSet(),boardMinutes=new Map();
 // 五檔錄製器：今天的錄製檔、加錄清單與換股紀錄、收盤整理狀態
 const BOOKS=path.join(LOCAL,'books');
 let bookRec=null,bookDay={date:''},bookBusy=false,bookError='';
@@ -88,7 +89,7 @@ function loadMarketState(){
   liveHeat=null;lastSnap=null;monitorPauseUntil=0;monitorError='';radarState=null;radarPlans={at:0,map:new Map()};alertsBox={date:'',list:[]};
   replayCache={key:'',data:null};boardGroupCache={key:'',data:null};calendarCache={date:'',dates:[]};heatSummaryCache=null;grLive={at:0,data:null};grAttempt={date:'',at:0};
   newsState=null;newsStatus={at:0,error:'',found:0,seeded:false};newsPauseUntil=0;kbarMiss.clear();priceRules=read('price-alerts.json',[]).filter(r=>r&&RULE_KINDS.includes(r.kind)&&validId(r.stockId));ruleState=null;kbarDenied={until:0,error:''};
-  if(stream){stream.close();stream=null;}streamRows=new Map();streamDate='';streamAsOf='';streamState={...streamState,connected:false};
+  if(stream){stream.close();stream=null;}streamRows=new Map();boardMinutes=new Map();streamSessionRows=new WeakSet();streamDate='';streamAsOf='';streamState={...streamState,connected:false};
   if(bookRec){bookRec.close();bookRec=null;}bookDay={date:''};
   dtHistory.reset();subscribedIds=new Set();dt=null;dtMeta=new Map();dtSaved='';dtFallback='';{const p=read('daytrade-prep.json',null);dtPrep={date:p?.date||'',busy:false,data:p,at:0};}
   resetReplayCache();invalidate();
@@ -191,8 +192,8 @@ function yesterdayVolume(id,date){
 }
 function onStreamRows(rows){
   const date=today(),fresh=rows.filter(r=>String(r.date).slice(0,10)===date);
-  if(streamDate!==date){streamDate=date;streamRows=new Map();streamAsOf='';}
-  for(const r of fresh){if(streamState.provider==='shioaji')heatSessionRows.add(r);r.yesterday_volume=yesterdayVolume(r.stock_id,date);streamRows.set(r.stock_id,r);if(String(r.date)>streamAsOf)streamAsOf=String(r.date);}
+  if(streamDate!==date){streamDate=date;streamRows=new Map();boardMinutes=new Map();streamAsOf='';}
+  for(const r of fresh){if(streamState.provider==='shioaji'){if(!validBoardQuote(r,date))continue;const previous=streamRows.get(r.stock_id);if(previous&&boardStamp(previous.date)>boardStamp(r.date))continue;streamSessionRows.add(r);recordBoardMinute(boardMinutes,r);}r.yesterday_volume=yesterdayVolume(r.stock_id,date);streamRows.set(r.stock_id,r);if(String(r.date)>streamAsOf)streamAsOf=String(r.date);}
   streamState={...streamState,lastAt:Date.now()};
   if(fresh.length)try{runRadar(date,fresh);}catch(e){console.error(t('異動雷達失敗：')+e.message);}
 }
@@ -224,7 +225,7 @@ async function streamTick(){
   if(!stream){
     const key=await getSecret(p.id,p.keyEnv);if(!key)return;
     streamState={...meta,connected:false,symbols:plan.ids.length,subscribed:0,expected:plan.ids.length*plan.channels.length,lastAt:0,alive:0,error:'',since:0,resumed:0,connections:[]};
-    stream=createStreamPool({spec:p.stream,key,market:M(),groups:plan.groups,flushMs:500,onEvents:onStreamEvents,onEvent:ev=>{onBookEvent(ev);if(ev.kind==='book'&&subscribedIds.has(ev.id))dt?.engine.ingest([ev]);},onStatus:onStreamStatus});
+    stream=createStreamPool({spec:p.stream,key,market:M(),groups:plan.groups,flushMs:500,onEvents:onStreamEvents,onEvent:ev=>{if(!validStreamEvent(ev))return;onBookEvent(ev);if(ev.kind==='book'&&subscribedIds.has(ev.id))dt?.engine.ingest([ev]);},onStatus:onStreamStatus});
   }else{streamState={...streamState,...meta};stream.update(plan.groups);}
   bookStart(plan);
   // 自動判斷方案：完整模式連線 15 秒後訂閱仍不足（方案上限不夠），今天改用精簡模式
@@ -237,7 +238,7 @@ function onStreamStatus(s){
   if(streamState.connected&&s.connected===false){const d=today();if(streamDrops.date!==d)streamDrops={date:d,list:[]};const down=(s.connections||[]).map((c,i)=>c.connected?null:i+1).filter(Boolean);streamDrops.list.push({at:Date.now(),conns:down,reason:s.error||'close'});if(streamDrops.list.length>50)streamDrops.list.shift();console.log(t('即時推播斷線：連線 {conns}（{reason}）',{conns:down.join('、')||'—',reason:s.error||'close'}));}
   const prev=streamState.since;streamState={...streamState,...s};
   // 重連後先等待這次連線的報價，不能用前次連線快取恢復即時圖。
-  if(s.since&&s.since!==prev)heatSessionRows=new WeakSet();
+  if(s.since&&s.since!==prev){streamSessionRows=new WeakSet();boardMinutes=new Map();}
   if(!s.connected&&dt){dt.engine.setFeed(false);dt.engine.markGap([...subscribedIds]);}
   // 盤中才連上或斷線重連：補資料完成前暫停訊號（盤前連線不需要）
   if(s.since&&s.since!==prev&&dt?.date===today()&&dt.engine.phase(Date.now())!=='pre')backfillAll();
@@ -245,8 +246,9 @@ function onStreamStatus(s){
 }
 // 推播事件：有當沖引擎時由引擎整理成快照列；沒有時（精簡模式且未開啟當沖監控）直接用聚合行情。
 // 五檔錄製器加錄的股票只用於錄製，不進入當沖引擎與雷達
+function validStreamEvent(ev){return streamState.provider!=='shioaji'||ev.kind!=='agg'||subscribedIds.has(ev.id)&&validBoardQuote(ev.row,today())&&Number.isFinite(ev.time)&&ev.time>0&&ev.time<=Date.now()+10000;}
 function onStreamEvents(all){
-  const ex=bookDay.extraSet,events=ex?.size?all.filter(x=>!ex.has(x.id)):all;
+  const fresh=all.filter(validStreamEvent),ex=bookDay.extraSet,events=ex?.size?fresh.filter(x=>!ex.has(x.id)):fresh;
   const e=dt?.date===today()?dt.engine:null;
   if(e){const changed=e.ingest(events.filter(x=>x.kind!=='book'));onStreamRows([...changed].map(id=>e.row(id)).filter(Boolean));}
   else onStreamRows(events.filter(x=>x.kind==='agg').map(x=>x.row));
@@ -559,7 +561,7 @@ function priceRulesInfo(){
 }
 
 /* ---------- 即時看板 ---------- */
-// 看板與走勢圖（含點卡片開啟的日 K／5 分 K）只用資料源的盤中快照（例如 FinMind，每 10 秒）；即時推播只給異動雷達與當沖掃描。
+// Shioaji 看板共用既有推播；其他來源沿用快照／回放。日 K 與 5 分 K 查詢仍由原資料源提供。
 // 今日報價：盤中用最新快照；重新啟動後改用時光機最後一個畫格。
 function replayToday(){const days=listDays(),date=days.at(-1);return date?loadDay(date):null;}
 const snapRow=(id,date)=>lastSnap&&(!date||lastSnap.date===date)?lastSnap.byId.get(id)||null:null;
@@ -570,27 +572,31 @@ function quoteOf(id,{board=false}={}){
   if(r){const close=Number(r.close),ch=Number(r.change_price),prev=close-ch,n=v=>v==null||v===''?null:Number(v);return{close,change:prev>0?Math.round(ch/prev*1e4)/100:null,changePrice:ch,open:Number(r.open),high:Number(r.high),low:Number(r.low),volume:Number(r.total_volume),amount:Number(r.total_amount),yesterdayVolume:Number(r.yesterday_volume),bid:Number(r.buy_price),ask:Number(r.sell_price),volumeAtBid:n(r.volume_at_bid),volumeAtAsk:n(r.volume_at_ask),source:r===streamFor(id)?'stream':'snapshot',time:String(r.date).slice(11,19),date:String(r.date).slice(0,10)};}
   return null;
 }
+function shioajiBoard(){
+  if(data.pick('stream')?.id!=='shioaji')return null;
+  return boardStream([...streamRows.values()].filter(r=>streamSessionRows.has(r)),{ids:subscribedIds,today:today(),enabled:settings.monitor!==false,open:liveWindow(),connected:!!stream&&streamState.provider==='shioaji'&&streamState.connected,alive:streamState.alive,since:streamState.since,subscribed:streamState.subscribed,error:streamState.error});
+}
 function boardData(ids){
-  const day=replayToday(),idx=day?new Map(day.ids.map((id,i)=>[id,i])):new Map(),m=market(),{meta}=uniIndex();
+  const pushed=shioajiBoard(),day=replayToday(),idx=day?new Map(day.ids.map((id,i)=>[id,i])):new Map(),m=market(),{meta}=uniIndex();
   const stocks=ids.map(id=>{
-    const s=m.stocks.find(x=>x.id===id),q=quoteOf(id,{board:true}),i=idx.get(id);
-    // 全日走勢圖：時光機每分鐘一點，橫軸位置＝該時間在全日交易時段中的比例（0＝開盤、1＝收盤）；最後一點換成最新快照（每 10 秒移動）
-    const pts=i==null?[]:day.frames.map(f=>[sessionPos(f.t),framePrice(day,f,i)]).filter(([x,v])=>x!=null&&v>0);
-    if(q?.close>0&&day?.date===q.date&&pts.length){const pt=[sessionPos(q.time),q.close];if(q.time.slice(0,5)===day.frames.at(-1)?.t)pts[pts.length-1]=pt;else if(pt[0]>=pts.at(-1)[0])pts.push(pt);}
-    let quote=q;if(!quote&&i!=null&&day.frames.length){const f=day.frames.at(-1),close=framePrice(day,f,i),prev=prevPrice(day,i);if(close>0)quote={close,change:prev>0?Math.round((close/prev-1)*1e4)/100:null,changePrice:prev>0?Math.round((close-prev)*1e4)/1e4:null,amount:frameAmount(day,f,i),time:f.t,date:day.date};}
+    const s=m.stocks.find(x=>x.id===id),q=pushed?streamBoardQuote(pushed.rows.get(id)):quoteOf(id,{board:true}),i=idx.get(id);
+    let pts=pushed?(q?boardSpark(boardMinutes.get(id),sessionPos):[]):i==null?[]:day.frames.map(f=>[sessionPos(f.t),framePrice(day,f,i)]).filter(([x,v])=>x!=null&&v>0);
+    if(!pushed&&q?.close>0&&day?.date===q.date&&pts.length){const pt=[sessionPos(q.time),q.close];if(q.time.slice(0,5)===day.frames.at(-1)?.t)pts[pts.length-1]=pt;else if(pt[0]>=pts.at(-1)[0])pts.push(pt);}
+    let quote=q;if(!pushed&&!quote&&i!=null&&day.frames.length){const f=day.frames.at(-1),close=framePrice(day,f,i),prev=prevPrice(day,i);if(close>0)quote={close,change:prev>0?Math.round((close/prev-1)*1e4)/100:null,changePrice:prev>0?Math.round((close-prev)*1e4)/1e4:null,amount:frameAmount(day,f,i),time:f.t,date:day.date};}
     const step=Math.max(1,Math.ceil(pts.length/135)),use=pts.filter((_,k)=>k%step===0||k===pts.length-1);
-    return{id,name:s?.name||meta.get(id)?.name||id,sector:s?.sector||meta.get(id)?.sector||'',score:s?.score??null,prev:i==null?null:prevPrice(day,i),quote,daily:s?{price:s.price,change:s.change,asOf:s.asOf}:null,spark:use.map(p=>p[1]),sparkX:use.map(p=>Math.round(p[0]*1e4)/1e4)};
+    return{id,name:s?.name||meta.get(id)?.name||id,sector:s?.sector||meta.get(id)?.sector||'',score:s?.score??null,prev:pushed?(q?.changePrice!=null?q.close-q.changePrice:null):i==null?null:prevPrice(day,i),quote,daily:s?{price:s.price,change:s.change,asOf:s.asOf}:null,spark:use.map(p=>p[1]),sparkX:use.map(p=>Math.round(p[0]*1e4)/1e4),...(pushed?{status:!subscribedIds.has(id)?'not-subscribed':q?'live':['live','partial'].includes(pushed.feed.status)?'waiting':pushed.feed.status}:{})};
   });
+  if(pushed){const times=stocks.map(s=>s.quote?.at).filter(Boolean).sort();return{live:!!times.length,stream:!!times.length,provider:'shioaji',date:today(),asOf:times.at(-1)||null,feed:pushed.feed,stocks};}
   return{live:!!lastSnap&&liveWindow(),stream:false,asOf:lastSnap?.asOf||null,date:lastSnap?.date||day?.date||null,stocks};
 }
 // 看板族群切換列：研究總覽各族群目前的量能加權漲幅（與族群排名同算法；同一份快照只算一次）
 function boardGroups(){
-  const key=lastSnap?`s${lastSnap.at}`:`r${listDays().at(-1)||''}:${researchScope.groups.length}`;
+  const pushed=shioajiBoard(),key=pushed?JSON.stringify([pushed.feed,streamState.lastAt,researchScope]):lastSnap?`s${lastSnap.at}`:`r${listDays().at(-1)||''}:${researchScope.groups.length}`;
   if(boardGroupCache.key===key)return boardGroupCache.data;
   let quotes=new Map();
-  if(lastSnap)quotes=quotesFromSnapshot(lastSnap.rows,grMeta());else{const day=replayToday();if(day?.frames.length)quotes=quotesFromReplay(day,grMeta());}
+  if(pushed)quotes=quotesFromSnapshot([...pushed.rows.values()],grMeta());else if(lastSnap)quotes=quotesFromSnapshot(lastSnap.rows,grMeta());else{const day=replayToday();if(day?.frames.length)quotes=quotesFromReplay(day,grMeta());}
   const stats=new Map(buildGroupRanking(researchScope.groups,quotes).map(g=>[g.id,g]));
-  const groups=researchScope.groups.map(g=>{const s=stats.get(g.id);return{id:g.id,name:g.name,count:g.stockIds.length,score:s?.score??null,rank:s?.rank??null,up:s?.up??0,down:s?.down??0,amount:s?.amount||0};});
+  const groups=researchScope.groups.map(g=>{const s=stats.get(g.id);return{id:g.id,name:g.name,count:g.stockIds.length,score:s?.score??null,rank:s?.rank??null,up:s?.up??0,down:s?.down??0,amount:s?.amount||0,...(pushed?{quoted:s?.quoted||0}: {})};});
   boardGroupCache={key,data:groups};return groups;
 }
 
@@ -1210,7 +1216,7 @@ function importBundle(b,parts){
 }
 
 /* ---------- HTTP ---------- */
-const STATIC = { '/':'index.html', '/app.js':'app.js', '/heatmap.js':'heatmap.js', '/heat-feed.js':'heat-feed.js', '/briefing.js':'briefing.js','/flow-cards.js':'flow-cards.js', '/live.js':'live.js', '/insight-ui.js':'insight-ui.js', '/report-card.js':'report-card.js', '/save-image.js':'save-image.js', '/prefs.js':'prefs.js', '/grouprank.js':'grouprank.js', '/i18n.js':'i18n.js', '/setup.js':'setup.js', '/market.js':'market.js', '/daytrade.js':'daytrade.js', '/intraday.js':'intraday.js', '/chipwatch.js':'chipwatch.js', '/hud.css':'hud.css', '/favicon.svg':'favicon.svg' };
+const STATIC = { '/':'index.html', '/app.js':'app.js', '/heatmap.js':'heatmap.js', '/heat-feed.js':'heat-feed.js', '/briefing.js':'briefing.js','/flow-cards.js':'flow-cards.js', '/live.js':'live.js', '/quote-source.js':'quote-source.js', '/insight-ui.js':'insight-ui.js', '/report-card.js':'report-card.js', '/save-image.js':'save-image.js', '/prefs.js':'prefs.js', '/grouprank.js':'grouprank.js', '/i18n.js':'i18n.js', '/setup.js':'setup.js', '/market.js':'market.js', '/daytrade.js':'daytrade.js', '/intraday.js':'intraday.js', '/chipwatch.js':'chipwatch.js', '/hud.css':'hud.css', '/favicon.svg':'favicon.svg' };
 // 舊版模組丟出的一般錯誤（尚未改成 UserError）中，可以直接顯示的訊息
 const LEGACY_MESSAGE=/FinMind|金鑰|股票|族群|設定|格式|請|更新|無效|內容|行情|休市|公布|日期|查無|日報|雷達|時光機|畫格|分組|自選/;
 const server = http.createServer(async (req,res) => {
@@ -1228,7 +1234,7 @@ const server = http.createServer(async (req,res) => {
     if((flowBusy||heatBusy)&&req.method==='POST'&&['/api/update','/api/pattern-update','/api/news','/api/token','/api/provider-key','/api/config'].includes(route))return json(res,409,{error:t('即時查詢進行中，請稍候')});
     if(route==='/api/heatmap'&&req.method==='GET'){const dates=heatFiles();let date=url.searchParams.get('date');if(!date||date==='latest')date=dates.at(-1)||null;else if(!validHeatDate(date))throw new UserError('請選擇有效日期');return json(res,200,{data:date?read('heatmap-'+date+'.json',null):null,dates:dates.slice(-60),scope:data.has('dailyAll')?'market':'research'});}
     if(route==='/api/heatmap/live'&&req.method==='GET'){
-      if(data.pick('stream')?.id==='shioaji')return json(res,200,buildStreamHeatmap([...streamRows.values()].filter(r=>heatSessionRows.has(r)),{subscribedIds,connected:!!stream&&streamState.provider==='shioaji'&&streamState.connected,subscribedCount:streamState.subscribed,error:!!streamState.error,alive:streamState.alive,enabled:settings.monitor!==false,open:liveWindow(),universe:uniIndex().list,sectorOf:heatSectorOf(),today:today(),market:M()}));
+      if(data.pick('stream')?.id==='shioaji')return json(res,200,buildStreamHeatmap([...streamRows.values()].filter(r=>streamSessionRows.has(r)),{subscribedIds,connected:!!stream&&streamState.provider==='shioaji'&&streamState.connected,subscribedCount:streamState.subscribed,error:!!streamState.error,alive:streamState.alive,enabled:settings.monitor!==false,open:liveWindow(),universe:uniIndex().list,sectorOf:heatSectorOf(),today:today(),market:M()}));
       if(!liveWindow())return json(res,200,{live:false,data:liveHeat?.data?.date===today()?liveHeat.data:null,refreshMs:snapPlan().every});
       if(!data.has('snapshot'))throw new UserError('目前的資料源不支援盤中即時報價');
       return json(res,200,{live:true,data:await liveHeatmap(),refreshMs:snapPlan().every});
@@ -1297,7 +1303,7 @@ const server = http.createServer(async (req,res) => {
       await saveLlmKey('anthropic',b.key);return json(res,200,{ok:true});
     }
     /* ----- 盤中監控、雷達、看板、時光機 ----- */
-    if(route==='/api/monitor'&&req.method==='GET')return json(res,200,{enabled:settings.monitor!==false,capable:data.has('snapshot'),mode:data.snapshotMode(),every:snapPlan().every,window:liveWindow(),lastAt:liveHeat?.at||null,asOf:liveHeat?.data?.asOf||null,error:monitorError,pausedUntil:monitorPauseUntil>Date.now()?monitorPauseUntil:null,radar:normalizeRadar(settings.radar),replayDays:listDays(),news:newsInfo(),stream:streamInfo()});
+    if(route==='/api/monitor'&&req.method==='GET')return json(res,200,{enabled:settings.monitor!==false,snapshot:{provider:data.pick('snapshot')?.id||null,error:monitorError,asOf:liveHeat?.data?.asOf||null},capable:data.has('snapshot'),mode:data.snapshotMode(),every:snapPlan().every,window:liveWindow(),lastAt:liveHeat?.at||null,asOf:liveHeat?.data?.asOf||null,error:monitorError,pausedUntil:monitorPauseUntil>Date.now()?monitorPauseUntil:null,radar:normalizeRadar(settings.radar),replayDays:listDays(),news:newsInfo(),stream:streamInfo()});
     if(route==='/api/news/settings'&&req.method==='POST'){
       const b=await body(req);if(!validNewsInput(b))throw new UserError('新聞推播設定格式錯誤');
       const was=normalizeNews(settings.news).enabled;settings={...settings,news:normalizeNews(b)};saveSettings();

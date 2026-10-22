@@ -30,3 +30,9 @@ Nexus/Pocket 分別使用 4391/4392，手機示意密碼同上。執行 `PLAYWRI
 ## main 功能保留檢查
 
 `check-main-preservation.mjs` 使用同一份獨立示意資料與 4391 測試站。將測試設定啟用 `finmind`、關閉 monitor／autoUpdate，並使用 `FINMIND_API_TOKEN=offline-demo DEMO_TIME=2026-10-16T19:00:00+08:00` 及上述離線模組啟動；不使用真實金鑰。執行 `PLAYWRIGHT=<playwright/index.mjs> node tools/screenshots/check-main-preservation.mjs`，驗證權證快取與 API、分點舊日期、儲存設定不跳日及其他日期選擇。只會寫入示意目錄的門檻設定。
+
+## Shioaji 看板與快照警告
+
+使用獨立示意目錄，執行 demo-data 與 demo-data2 後啟用 shioaji、monitor 與 daytrade，關閉 autoUpdate。沿用 heat-stream-offline 模組，時間設為 `2026-10-22T10:00:00+08:00`，Nexus／Pocket 使用 4391／4392，橋接與登入只填示意通行碼。
+
+執行 `PLAYWRIGHT=<playwright/index.mjs> node tools/screenshots/capture-board-stream.mjs <輸出目錄>`。工具使用 Chrome，驗證兩版來源名稱、每卡報價時間、快照錯誤出現與解除、斷線空價、請求失敗與恢復。HTTP／斷線畫面以攔截測試瀏覽器的 API 回應模擬；正常報價來自離線橋接樣本，不接真實券商。

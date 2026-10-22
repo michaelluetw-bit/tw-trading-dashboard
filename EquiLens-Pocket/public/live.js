@@ -1,3 +1,4 @@
+import { boardFeedNotice, snapshotErrorNotice, quoteProviderName, boardUnavailableLabel, boardRequestFailed, createBoardLoader } from './quote-source.js';
 // 衡析 Pocket：盤中分頁（族群／自選即時看板、異動雷達、族群排名、雷達設定）、個股 K 線、熱浪時光機、個股籌碼深度、AI 盤後日報、推播訂閱。
 import { esc, fmt, pct, cls, sparkSVG, candleSVG, brokerHTML, holderHTML, warrantHTML, warrantBrokersHTML, alertRow, alertMatch, isMove, ALERT_GROUPS, reportHTML, rotationData, rotationSVG, replayStocks, priceRuleForm, priceRulesHTML, priceRuleBody } from './insight-ui.js';
 import { tx } from './i18n.js';
@@ -23,7 +24,7 @@ const elapsed = s => MK.elapsed(s);
 const yi = v => v == null ? '—' : fmt(v / 1e8, Math.abs(v) >= 1e10 ? 0 : 1);
 
 /* ---------- data ---------- */
-export async function loadBoard() { try { const want = L.bgroup, b = await C.api('api/board' + (want ? '?group=' + encodeURIComponent(want) : '')); if (want === L.bgroup) { L.board = b; L.boardAt = Date.now(); L.error = ''; } } catch (e) { if (!e.silent) L.error = e.message; } }
+export const loadBoard = createBoardLoader({group:()=>L.bgroup,request:want=>C.api('api/board'+(want?'?group='+encodeURIComponent(want):'')),today:()=>MK.today(),receive:b=>{L.board=b;L.boardAt=Date.now();L.error='';},fail:e=>{L.board=boardRequestFailed(L.board);if(!e.silent)L.error=e.message;}});
 export async function loadAlerts(reset = false) {
   try {
     const r = await C.api('api/alerts?since=' + (reset ? 0 : L.latest));
@@ -47,11 +48,11 @@ setInterval(async () => {
 }, 10000);
 // 即時推播（例如富果 WebSocket）運作時，盤中分頁的看板與異動每 3 秒更新
 let streamTick = 0;
-const streamOn = () => !!L.monitor?.stream?.active;
-async function refreshStream() { try { const m = await C.api('api/monitor'); if (L.monitor) { L.monitor.stream = m.stream; L.monitor.error = m.error; } } catch { } }
+const streamOn = () => L.board?.provider==='shioaji' || !!L.monitor?.stream?.active;
+async function refreshStream() { try { const m = await C.api('api/monitor'); if (L.monitor) { L.monitor.stream = m.stream; L.monitor.error = m.error; L.monitor.snapshot = m.snapshot; } } catch { } }
 setInterval(async () => {
   if (!C || document.hidden || C.S.tab !== 'live' || !streamOn() || !marketOpen()) return;
-  await Promise.all([L.view === 'daytrade' ? loadDaytrade() : null, loadAlerts()]); // 看板固定用快照，每 10 秒更新
+  await Promise.all([L.board?.provider==='shioaji'?loadBoard():null,L.view === 'daytrade' ? loadDaytrade() : null, loadAlerts()]);
   if (C.S.tab === 'live' && !sheetOpen()) redrawLive();
 }, 3000);
 const sheetOpen = () => C.$('#sheet')?.classList.contains('open');
@@ -69,10 +70,10 @@ function streamPill(st) {
 }
 export function livePage() {
   const m = L.monitor, open = marketOpen();
-  const status = `<div class="statusline"><span class="pill"><span class="dot ${open && m?.enabled ? 'live' : ''}"></span>${!m ? '讀取中' : !m.enabled ? '監控已關閉' : open ? `監控中 ${esc(L.board?.asOf?.slice(11, 19) || '')}` : '非盤中'}</span>${m?.error ? `<span class="pill warn">${esc(m.error)}</span>` : ''}${open ? streamPill(m?.stream) : ''}<span class="pill">今日異動 ${L.alerts.filter(isMove).length}</span>${m?.news?.enabled ? `<span class="pill">🗞️ 新聞 ${L.alerts.filter(a => a.type === 'news').length}</span>` : ''}</div>`;
+  const status = `<div class="statusline"><span class="pill"><span class="dot ${open && m?.enabled ? 'live' : ''}"></span>${!m ? '讀取中' : !m.enabled ? '監控已關閉' : open ? `監控中 ${esc(L.board?.asOf?.slice(11, 19) || '')}` : '非盤中'}</span>${open && !L.board?.feed ? streamPill(m?.stream) : ''}<span class="pill">今日異動 ${L.alerts.filter(isMove).length}</span>${m?.news?.enabled ? `<span class="pill">🗞️ 新聞 ${L.alerts.filter(a => a.type === 'news').length}</span>` : ''}</div>`;
   const seg = `<div class="seg" style="margin-bottom:12px">${[['board', '看板'], ...(DT.info?.capable ? [['daytrade', '當沖']] : []), ['radar', '雷達'], ['rules', '提醒'], ['groups', '族群排名'], ['settings', '設定']].map(([v, l]) => `<button class="${L.view === v ? 'on' : ''}" data-lview="${v}">${l}</button>`).join('')}</div>`;
   const err = L.error ? `<div class="notice err">${esc(L.error)}</div>` : '';
-  return status + seg + err + (L.view === 'board' ? boardView() : L.view === 'daytrade' ? daytradeView() : L.view === 'radar' ? radarView() : L.view === 'rules' ? rulesView() : L.view === 'groups' ? groupsView() : settingsView());
+  return status + boardFeedNotice(L.board?.feed) + snapshotErrorNotice(m) + seg + err + (L.view === 'board' ? boardView() : L.view === 'daytrade' ? daytradeView() : L.view === 'radar' ? radarView() : L.view === 'rules' ? rulesView() : L.view === 'groups' ? groupsView() : settingsView());
 }
 /* ---------- 當沖掃描 ---------- */
 const DT_SIG = { 'dt-breakout': '💥 爆量突破', 'dt-vwap': '📈 VWAP 延續', 'dt-bid': '🟢 五檔增強', 'dt-weak': '⚠️ 多單轉弱', 'dt-risk': '🛑 參考停損' };
@@ -100,7 +101,7 @@ function daytradeView() {
   const d = DT.info; if (!d) return '<div class="empty"><span class="spinner"></span> 讀取中…</div>';
   const f = d.feed || {}, p = d.prep, n = v => v == null ? '—' : fmt(v, 1);
   const feed = !f.window ? '非盤中 · 平日開盤前 10 分鐘自動連線' : !f.connected ? (f.authFailed ? '金鑰無效或方案不支援（10 分鐘後重試）' : f.error ? `即時推播未連線：${esc(f.error === 'no-heartbeat' ? '連線逾時，重新連線中' : f.error)}` : '即時推播連線中…')
-    : `⚡ ${f.mode === 'full' ? '完整模式（逐筆＋分 K＋五檔）' : '精簡模式（聚合行情）'} · 訂閱 ${fmt(f.subscribed)}／${fmt(f.expected)}${f.backfill?.busy ? ` · 補資料中 ${f.backfill.done}／${f.backfill.total}` : ''}`;
+    : `${esc(quoteProviderName(f.provider))} · ⚡ ${f.mode === 'full' ? '完整模式（逐筆＋分 K＋五檔）' : '精簡模式（聚合行情）'} · 訂閱 ${fmt(f.subscribed)}／${fmt(f.expected)}${f.backfill?.busy ? ` · 補資料中 ${f.backfill.done}／${f.backfill.total}` : ''}`;
   const prep = p ? `${p.eligible == null ? '可當沖清單未取得' : `可當沖 ${fmt(p.eligible)} 檔`} · 處置 ${p.disposition} · 暫停交易 ${p.suspended}` : '盤前資料於開盤前 30 分鐘取得';
   const head = `<section class="card dt-head"><div>${esc(d.phaseName || '')}${d.phaseName ? ' · ' : ''}${feed}</div><small>${prep}</small>${dtMarketLine(d.market)}</section>`;
   if (!d.enabled) return head + '<div class="empty">當沖監控已關閉（可在電腦版「盤中雷達 → 當沖掃描 → 設定」開啟）。</div>';
@@ -114,7 +115,7 @@ function daytradeView() {
 }
 /* ---------- 即時看板：自選或研究總覽任一族群 ---------- */
 const BOARD_SORTS = [['default', '預設'], ['chg', '漲幅'], ['amt', '成交值']];
-const chgOf = s => s.quote?.change ?? s.daily?.change;
+const chgOf = s => s.status ? s.quote?.change : s.quote?.change ?? s.daily?.change;
 function sortStocks(list) {
   if (L.bsort === 'chg') return list.slice().sort((a, b) => (chgOf(b) ?? -1e9) - (chgOf(a) ?? -1e9));
   if (L.bsort === 'amt') return list.slice().sort((a, b) => (b.quote?.amount || 0) - (a.quote?.amount || 0));
@@ -130,14 +131,14 @@ function boardView() {
   if (b.loading) return chips + bar + '<div class="empty"><span class="spinner"></span> 讀取中…</div>';
   if (!b.stocks.length) return chips + bar + `<div class="empty">${b.group === 'watch' ? '尚無自選股。在「個股」分頁點選股票後按 ☆ 加入，或在上方切換到任一族群看板。' : '此族群沒有成分股。'}</div>`;
   return chips + bar + `<div class="lv-grid">${sortStocks(b.stocks).map(s => {
-    const q = s.quote, chg = chgOf(s), price = q?.close ?? s.daily?.price;
+    const q = s.quote, chg = chgOf(s), price = b.provider==='shioaji' ? q?.close : q?.close ?? s.daily?.price;
     const ratio = q?.volume && q?.yesterdayVolume && elapsed(q.time) >= 5 ? q.volume / (elapsed(q.time) / MK.sessionLength()) / q.yesterdayVolume : null;
     // 外盤比（即時推播才有）：外盤成交量 ÷（內盤＋外盤），高代表買方積極
     const outer = q?.volumeAtAsk != null && q?.volumeAtBid != null && q.volumeAtAsk + q.volumeAtBid > 0 ? q.volumeAtAsk / (q.volumeAtAsk + q.volumeAtBid) * 100 : null;
     return `<button class="lv-card ${cls(chg)}" data-intra="${s.id}"><div class="lv-top"><b>${esc(s.name)}<small class="num">${s.id}</small></b>${s.score != null ? `<span class="score ${s.score >= 75 ? 'hi' : s.score >= 55 ? 'mid' : ''}">${fmt(s.score)}</span>` : ''}</div>
       <div class="lv-px"><span class="num big ${cls(chg)}">${fmt(price, 2)}</span><span class="chg num ${cls(chg)}">${pct(chg)}</span></div>
       ${sparkSVG(s.spark, s.prev, { xs: s.sparkX })}
-      <div class="lv-meta num"><span>${q?.volume ? `${fmt(q.volume)} 張` : q?.time ? `收盤 ${q.time}` : s.daily?.asOf ? `日資料 ${s.daily.asOf.slice(5)}` : '—'}</span><span>${q?.amount ? `${yi(q.amount)} 億` : ''}</span><span class="${ratio >= 2 ? 'up' : ''}">${ratio ? `量比 ${fmt(ratio, 1)}` : ''}</span>${outer != null ? `<span class="${outer >= 60 ? 'up' : outer <= 40 ? 'down' : ''}">外盤 ${fmt(outer, 0)}%</span>` : ''}</div></button>`;
+      <div class="lv-meta num">${b.provider==='shioaji'?`<span>${q?`Shioaji ${esc(q.time)}`:esc(boardUnavailableLabel(s.status))}</span>`:''}<span>${q?.volume ? `${fmt(q.volume)} 張` : q?.time ? `收盤 ${q.time}` : s.daily?.asOf ? `日資料 ${s.daily.asOf.slice(5)}` : '—'}</span><span>${q?.amount ? `${yi(q.amount)} 億` : ''}</span><span class="${ratio >= 2 ? 'up' : ''}">${ratio ? `量比 ${fmt(ratio, 1)}` : ''}</span>${outer != null ? `<span class="${outer >= 60 ? 'up' : outer <= 40 ? 'down' : ''}">外盤 ${fmt(outer, 0)}%</span>` : ''}</div></button>`;
   }).join('')}</div><p class="foot">${b.live ? (b.stream ? '即時推播（每 3 秒更新畫面）' : '盤中每 10 秒更新') : b.date ? `顯示 ${esc(b.date)} 最後狀態` : '開盤後自動顯示即時報價'} · 點卡片看即時走勢（均價線、族群均價線）、五檔與日 K／5 分 K<br>族群旁的數字為量能加權漲幅（與「族群排名」同算法）</p>`;
 }
 function radarView() {

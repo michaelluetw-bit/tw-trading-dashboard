@@ -1,3 +1,4 @@
+import { boardFeedNotice, snapshotErrorNotice, quoteProviderName, boardUnavailableLabel, boardRequestFailed, createBoardLoader } from './quote-source.js';
 // 衡析 Nexus：盤中雷達頁（族群／自選即時看板＋異動雷達＋雷達設定）、個股 K 線視窗、桌面通知、新聞推播、個股籌碼深度、AI 盤後日報與排程設定。
 import { esc, fmt, pct, cls, sparkSVG, candleSVG, brokerHTML, holderHTML, warrantHTML, warrantBrokersHTML, alertRow, alertMatch, isMove, ALERT_GROUPS, reportHTML, priceRuleForm, priceRulesHTML, priceRuleBody } from './insight-ui.js';
 import { t, tx, translateTree } from './i18n.js';
@@ -23,7 +24,7 @@ const content = () => document.getElementById('pagecontent');
 function repaint() { if (C.page() === 'live' && content() && !document.querySelector('dialog[open]')) content().innerHTML = livePage(); }
 
 /* ---------- data & polling ---------- */
-async function loadBoard() { try { const want = L.bgroup, b = await C.api('board?group=' + encodeURIComponent(want)); if (want === L.bgroup) { L.board = b; L.error = ''; } } catch (e) { L.error = e.message; } }
+const loadBoard = createBoardLoader({group:()=>L.bgroup,request:want=>C.api('board?group='+encodeURIComponent(want)),today:()=>MK.today(),receive:b=>{L.board=b;L.error='';},fail:e=>{L.board=boardRequestFailed(L.board);L.error=e.message;}});
 let alertsBusy = null;
 function loadAlerts(reset = false) { if (!alertsBusy) alertsBusy = fetchAlerts(reset).finally(() => { alertsBusy = null; renderPip(); }); return alertsBusy; }
 async function fetchAlerts(reset) {
@@ -67,13 +68,13 @@ setInterval(async () => {
   if (onPage && marketOpen() && tick % 3 === 0) await refreshMonitor(); // 盤中每 30 秒確認即時推播狀態
   if (marketOpen() && tick % 3 === 0 && document.querySelector('[data-pa-box]') && !document.activeElement?.closest?.('[data-pa-form]')) { await loadRules(); paintRules(); } // 觸發後停用的單次提醒
 }, 10000);
-// 即時推播（例如富果 WebSocket）運作時：盤中雷達頁的異動每 3 秒更新（看板固定用快照，隨上面每 10 秒更新）；開著桌面通知時，異動也每 3 秒取一次
-const streamOn = () => !!L.monitor?.stream?.active;
+// 即時推播（例如富果 WebSocket）運作時：盤中雷達頁的異動每 3 秒更新；Shioaji 看板共用推播快取；開著桌面通知時，異動也每 3 秒取一次
+const streamOn = () => L.board?.provider==='shioaji' || !!L.monitor?.stream?.active;
 setInterval(async () => {
   if (!C || document.hidden || !streamOn() || !marketOpen()) return;
   const onPage = C.page() === 'live';
   if (!onPage && !L.notify) return;
-  await loadAlerts(!L.date);
+  await Promise.all([onPage&&L.board?.provider==='shioaji'?loadBoard():null,loadAlerts(!L.date)]);
   if (onPage) repaint();
 }, 3000);
 /* ---------- 浮動雷達視窗（Document Picture-in-Picture：永遠浮在最上層；不支援時改用一般彈出視窗） ---------- */
@@ -148,7 +149,7 @@ function notifyDesktop(list) {
 
 /* ---------- 即時看板：自選或研究總覽任一族群 ---------- */
 const BOARD_SORTS = [['default', '預設'], ['chg', '漲幅'], ['amt', '成交值']];
-const chgOf = s => s.quote?.change ?? s.daily?.change;
+const chgOf = s => s.status ? s.quote?.change : s.quote?.change ?? s.daily?.change;
 function sortStocks(list) {
   if (L.bsort === 'chg') return list.slice().sort((a, b) => (chgOf(b) ?? -1e9) - (chgOf(a) ?? -1e9));
   if (L.bsort === 'amt') return list.slice().sort((a, b) => (b.quote?.amount || 0) - (a.quote?.amount || 0));
@@ -166,13 +167,13 @@ function boardCards(b) {
   if (!b || b.loading) return '<div class="empty"><i class="spinner"></i>讀取中…</div>';
   if (!b.stocks.length) return b.group === 'watch' ? '<div class="empty"><h3>尚無自選股</h3><p>在研究總覽點 ☆ 加入自選，或在上方切換到任一族群看板。</p></div>' : '<div class="empty"><p>此族群沒有成分股。</p></div>';
   return `<div class="lv-grid">${sortStocks(b.stocks).map(s => {
-    const q = s.quote, chg = chgOf(s), price = q?.close ?? s.daily?.price;
+    const q = s.quote, chg = chgOf(s), price = b.provider==='shioaji' ? q?.close : q?.close ?? s.daily?.price;
     const ratio = q?.volume && q?.yesterdayVolume && elapsed(q.time) >= 5 ? q.volume / (elapsed(q.time) / MK.sessionLength()) / q.yesterdayVolume : null;
     // 外盤比（即時推播才有）：外盤成交量 ÷（內盤＋外盤），高代表買方積極
     const outer = q?.volumeAtAsk != null && q?.volumeAtBid != null && q.volumeAtAsk + q.volumeAtBid > 0 ? q.volumeAtAsk / (q.volumeAtAsk + q.volumeAtBid) * 100 : null;
     return `<button class="lv-card ${cls(chg)}" data-kbar="${s.id}"><div class="lv-top"><strong>${esc(s.name)} <span class="stockcode">${s.id}</span></strong>${s.score != null ? `<span class="tag ${s.score >= 75 ? 'amber' : 'cyan'}">${fmt(s.score)}</span>` : ''}</div>
     <div class="lv-px"><span class="mono ${cls(chg)}">${fmt(price, 2)}</span><span class="mono ${cls(chg)}">${pct(chg)}</span></div>${sparkSVG(s.spark, s.prev, { w: 200, h: 46, xs: s.sparkX })}
-    <div class="lv-meta mono"><span>${q?.volume ? `${fmt(q.volume)} ${MK.unit()}` : q?.time ? `收盤 ${q.time}` : s.daily?.asOf ? `日資料 ${s.daily.asOf.slice(5)}` : '—'}</span><span>${q?.amount ? `${yi(q.amount)} 億` : ''}</span><span class="${ratio >= 2 ? 'up' : ''}">${ratio ? `量比 ${fmt(ratio, 1)}` : ''}</span>${outer != null ? `<span class="${outer >= 60 ? 'up' : outer <= 40 ? 'down' : ''}" title="外盤成交量占內外盤合計">外盤 ${fmt(outer, 0)}%</span>` : ''}</div></button>`;
+    <div class="lv-meta mono">${b.provider==='shioaji'?`<span>${q?`Shioaji ${esc(q.time)}`:esc(boardUnavailableLabel(s.status))}</span>`:''}<span>${q?.volume ? `${fmt(q.volume)} ${MK.unit()}` : q?.time ? `收盤 ${q.time}` : s.daily?.asOf ? `日資料 ${s.daily.asOf.slice(5)}` : '—'}</span><span>${q?.amount ? `${yi(q.amount)} 億` : ''}</span><span class="${ratio >= 2 ? 'up' : ''}">${ratio ? `量比 ${fmt(ratio, 1)}` : ''}</span>${outer != null ? `<span class="${outer >= 60 ? 'up' : outer <= 40 ? 'down' : ''}" title="外盤成交量占內外盤合計">外盤 ${fmt(outer, 0)}%</span>` : ''}</div></button>`;
   }).join('')}</div>`;
 }
 
@@ -185,11 +186,11 @@ function streamText(st) {
 }
 export function livePage() {
   const m = L.monitor, open = marketOpen(), b = L.board;
-  const status = `<div class="notice ${m?.error ? 'warn' : ''}"><span><span class="pulse ${open && m?.enabled ? '' : 'off'}"></span> ${!m ? '讀取中…' : !m.enabled ? '盤中監控已關閉' : open ? `盤中監控中 · 行情時間 <b class="mono">${esc(b?.asOf?.slice(11, 19) || '—')}</b> · 每 10 秒` + streamText(m?.stream) : `非盤中 · 平日 ${MK.market().sessions?.[0]?.[0] || ''} 自動開始`}${m?.error ? ` · ${esc(m.error)}` : ''} · ${alertDayLabel() || '今日'}異動 <b class="mono">${L.alerts.filter(isMove).length}</b> 則${m?.news?.enabled ? ` · 🗞️ 新聞 <b class="mono">${L.alerts.filter(a => a.type === 'news').length}</b> 則` : ''}</span><span class="actions"><button data-live="pip" title="開啟永遠置頂的浮動雷達視窗">🪟 浮動雷達視窗</button><button data-live="notify">${L.notify ? '🔔 桌面通知：開' : '🔕 開啟桌面通知'}</button></span></div>`;
+  const status = `<div class="notice"><span><span class="pulse ${open && m?.enabled ? '' : 'off'}"></span> ${!m ? '讀取中…' : !m.enabled ? '盤中監控已關閉' : open ? `盤中監控中 · 行情時間 <b class="mono">${esc(b?.asOf?.slice(11, 19) || '—')}</b> · 每 ${b?.provider==='shioaji'?3:10} 秒` + (b?.feed?'':streamText(m?.stream)) : `非盤中 · 平日 ${MK.market().sessions?.[0]?.[0] || ''} 自動開始`} · ${alertDayLabel() || '今日'}異動 <b class="mono">${L.alerts.filter(isMove).length}</b> 則${m?.news?.enabled ? ` · 🗞️ 新聞 <b class="mono">${L.alerts.filter(a => a.type === 'news').length}</b> 則` : ''}</span><span class="actions"><button data-live="pip" title="開啟永遠置頂的浮動雷達視窗">🪟 浮動雷達視窗</button><button data-live="notify">${L.notify ? '🔔 桌面通知：開' : '🔕 開啟桌面通知'}</button></span></div>`;
   const list = L.alerts.filter(a => alertMatch(a, L.group)).slice().reverse();
   const radar = `<div class="lv-chips">${ALERT_GROUPS.map(([k, l]) => `<button class="${L.group === k ? 'selected' : ''}" data-agroup="${k}">${l} <b class="mono">${L.alerts.filter(a => alertMatch(a, k)).length}</b></button>`).join('')}</div><div class="ix-alerts">${list.map(alertRow).join('') || `<div class="empty"><p>${open ? '目前沒有符合條件的異動。' : '今日尚無異動紀錄。'}</p></div>`}</div>`;
   const sorts = `<div class="segmented" title="卡片排序">${BOARD_SORTS.map(([v, l]) => `<button class="${L.bsort === v ? 'selected' : ''}" data-bsort="${v}">${l}</button>`).join('')}</div>`;
-  return `${status}${L.error ? `<div class="notice err"><span>${esc(L.error)}</span></div>` : ''}${daytradePanel()}<div class="lv-layout"><section class="panel"><div class="panelhead"><div><h2><span class="idx">01</span>即時看板</h2><p>切換自選或研究總覽族群 · 盤中每 10 秒更新 · 虛線為昨收 · 點卡片看日 K／5 分 K</p></div>${sorts}</div>${boardGroupBar(b)}<div class="contentpad">${boardCards(b)}</div></section>
+  return `${status}${boardFeedNotice(b?.feed)}${snapshotErrorNotice(m)}${L.error ? `<div class="notice err"><span>${esc(L.error)}</span></div>` : ''}${daytradePanel()}<div class="lv-layout"><section class="panel"><div class="panelhead"><div><h2><span class="idx">01</span>即時看板</h2><p>切換自選或研究總覽族群 · 盤中每 ${b?.provider==='shioaji'?3:10} 秒更新 · 虛線為昨收 · 點卡片看日 K／5 分 K</p></div>${sorts}</div>${boardGroupBar(b)}<div class="contentpad">${boardCards(b)}</div></section>
   <aside class="rightcol"><section class="panel"><div class="panelhead"><div><h2><span class="idx">02</span>異動雷達</h2><p>爆量 · 急拉急殺 · 漲跌停 · 型態進場 · 跌破防守 · 自訂提醒</p></div></div>${radar}</section>${rulesPanel()}${settingsPanel()}</aside></div>`;
 }
 function rulesPanel() {
@@ -200,7 +201,7 @@ function settingsPanel() {
   const r = d.radar, get = p => p.split('.').reduce((o, k) => o[k], r);
   const sel = (p, opts, unit = '') => `<select data-rset="${p}">${opts.map(v => `<option value="${v}" ${String(get(p)) === String(v) ? 'selected' : ''}>${v === 0 ? '不限' : v >= 1e7 ? fmt(v / 1e8, 1) + ' 億' : v + unit}</option>`).join('')}</select>`;
   const row = (p, label, extra = '') => `<label class="lv-rule"><input type="checkbox" data-rset="${p}" ${(p === 'monitor' ? d.monitor : get(p)) ? 'checked' : ''}><span>${label}</span>${extra ? `<span class="lv-opts">${extra}</span>` : ''}</label>`;
-  return `<section class="panel"><div class="panelhead"><div><h2><span class="idx">04</span>雷達設定</h2><p>手機版同步共用 · 監控約 360 次 FinMind 請求／小時</p></div></div><div class="contentpad lv-settings">
+  return `<section class="panel"><div class="panelhead"><div><h2><span class="idx">04</span>雷達設定</h2><p>手機版同步共用 · 行情請求量依資料來源而異</p></div></div><div class="contentpad lv-settings">
     ${row('monitor', `盤中監控（${MK.market().sessions?.[0]?.[0] || ''}–${MK.market().sessions?.at(-1)?.[1] || ''}）`)}
     <div class="segmented" style="margin:10px 0">${[['watch', '只看自選'], ['research', '自選＋研究名單'], ['all', '全市場']].map(([v, l]) => `<button class="${r.scope === v ? 'selected' : ''}" data-rscope="${v}">${l}</button>`).join('')}</div>
     ${row('volume.on', '🔥 爆量', `預估量 ≥ ${sel('volume.ratio', [1.5, 2, 3, 5], ' 倍')} 昨量，成交 ≥ ${sel('volume.minAmount', [0, 50000000, 100000000, 500000000])}`)}
