@@ -6,4 +6,3 @@ globalThis.fetch=async(url,options)=>{
  if(u.hostname==='api.web.finmindtrade.com')return Response.json({status:200,api_request_limit:100,level:99,level_title:'fixture-sponsor'});
  return Response.json({status:200,data:[]});
 };
-
