@@ -13,7 +13,8 @@
     "check": "node --check server.mjs && node --check public/app.js && node --check public/setup.js && node --check public/market.js && node --check public/i18n.js && node --check public/heatmap.js && node --check public/briefing.js && node --check public/live.js && node --check public/insight-ui.js && node --check public/grouprank.js && node --check public/report-card.js && node --check public/chipwatch.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.131.0"
+    "@anthropic-ai/sdk": "^0.131.0",
+    "fast-xml-parser": "5.11.2"
   },
   "license": "MIT"
 }

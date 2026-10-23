@@ -30,3 +30,7 @@ test('reminder failures and prior-day responses clear quotes without changing ru
  assert.equal(quote.currentPriceRulesResponse(info,'2026-10-23').rules[0].close,null);assert.equal(info.rules[0].close,110);
  assert.equal(quote.currentPriceRulesResponse({...info,feed:{status:'disconnected'}},'2026-10-22').rules[0].close,null);
 });
+test('RSS publishers render distinct names and independent success/error status without unsafe HTML',()=>{
+ const html=ui.newsSourcesHTML({status:{sources:[{provider:'technews',status:'ok',lastSuccess:10,error:''},{provider:'ltn',status:'error',error:'<img src=x>',retryAt:300010}]}},{time:String});
+ assert.match(html,/科技新報/);assert.match(html,/自由財經/);assert.match(html,/讀取正常/);assert.match(html,/讀取失敗/);assert.match(html,/300010/);assert.doesNotMatch(html,/<img/);
+});

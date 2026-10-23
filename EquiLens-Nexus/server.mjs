@@ -1,3 +1,5 @@
+import { RSS_SOURCES, RSS_INTERVAL, fetchRssNews } from './lib/providers/rss-news.mjs';
+import { createNewsPoller } from './lib/news-poll.mjs';
 import { finmindAccess, effectiveRetryAt } from './lib/finmind-access.mjs';
 import { createCredentialLifecycle } from './lib/finmind-lifecycle.mjs';
 import http from 'node:http';
@@ -37,8 +39,8 @@ import { cnyesNews } from './lib/providers/cnyes.mjs';
 import { queryFlows, validFlowDate, cacheableFlow } from './lib/flows.mjs';
 import { queryHeatmap, validHeatDate, cacheableHeatmap, buildStreamHeatmap, buildLiveHeatmap, liveWindow, LIVE_REFRESH_MS } from './lib/heatmap.mjs';
 import { focusNews, weekAgenda } from './lib/briefing.mjs';
-import { createNewsHealth, fetchNewsSource, newsSourceInfo } from './lib/news-health.mjs';
-import { collectArticles, normalizeNews, validNewsInput, createNewsState, scanNews, saveNewsState, quietNow } from './lib/newswatch.mjs';
+import { createNewsHealth, newsSourceInfo } from './lib/news-health.mjs';
+import { normalizeNews, validNewsInput, createNewsState, scanNewsSource, saveNewsState, quietNow } from './lib/newswatch.mjs';
 import { normalizeWatchGroups, editWatchGroups, setWatch } from './lib/watchgroups.mjs';
 export const APP_VERSION='3.0.0';
 const PORT = Number(process.env.PORT || 4330), ORIGIN = `http://127.0.0.1:${PORT}`;
@@ -75,7 +77,7 @@ let radarState=null,radarPlans={at:0,map:new Map()},alertsBox={date:'',list:[]},
 let priceRules=[],ruleState=null;
 let replayCache={key:'',data:null},boardGroupCache={key:'',data:null},calendarCache={date:'',dates:[]},heatSummaryCache=null;
 let grLive={at:0,data:null},grAttempt={date:'',at:0};
-let newsState=null,newsBusy=false,newsPauseUntil=0,newsHealth={},newsGeneration=0,newsStatus={at:0,error:'',found:0,seeded:false};
+let newsState=null,newsPauseUntil=0,newsHealth={},newsGeneration=0,newsStatus={at:0,error:'',found:0,seeded:false};
 let reportError='',reportAttempt={date:'',n:0,at:0};
 const kbarMiss=new Map(); // 資料源尚無分 K 的「股票:日期」，10 分鐘內不重查
 let kbarDenied={until:0,error:''}; // 金鑰或方案不足時 1 小時內不再請求分 K，直接用時光機
@@ -966,40 +968,51 @@ function newsAlert(a,{meta,watch,quiet,time}){
 }
 // 新聞來源：資料源的全市場新聞（例如 FinMind，額度或金鑰問題時暫停 30 分鐘）＋台股的鉅亨網（各自失敗不影響另一個）
 const cnyesOn=()=>M().id==='TW';
-async function scanNewsOnce(){
-  const started=Date.now(),generation=newsGeneration,health=createNewsHealth(newsHealth),x=clock(),dates=x.hour<8?[minusDays(x.date,1),x.date]:[x.date];
-  const fmId=data.has('marketNews')?data.source('marketNews'):null;
-  const rows=fmId?await fetchNewsSource(health,fmId,async()=>{const rows=[];for(const date of dates)rows.push(...await data.marketNews(date));return rows;}):[];
-  const cn=cnyesOn()?await fetchNewsSource(health,'cnyes',()=>cnyesNews()):[];
-  if(generation!==newsGeneration)return;
-  newsHealth=health;
-  newsPauseUntil=fmId?health[fmId]?.pausedUntil||0:0;
+const newsPoller=createNewsPoller();
+function persistNews(){
   if(!newsState)newsState=createNewsState(read('news-seen.json',null));
-  const errors=newsSources().filter(s=>s.enabled&&s.error).map(s=>`${s.provider}: ${s.error}`);
-  if(![fmId,cnyesOn()?'cnyes':null].some(id=>id&&health[id]?.lastSuccess>=started)){
-    // Persist source failures without advancing dedup time during a total outage.
-    write('news-seen.json',{...saveNewsState(newsState),health});
-    newsStatus={at:Date.now(),error:errors.join('；'),found:0,seeded:false};return;
-  }
-  // Keep first-source seeding and global deduplication unchanged.
-  const first=cn.length&&!newsState.sources.has('cnyes');
-  const scope=new Set(scopeIds(researchScope)),ns=normalizeNews(settings.news),watch=new Set(watchlist),{fresh,seeded}=scanNews(newsState,first?rows:[...rows,...cn],{scope,seedOnly:first?cn:[]});
-  if(first)newsState.sources.add('cnyes');
-  const freshKeys=new Set(fresh.flatMap(a=>a.keys));
-  for(const [id,items] of [[fmId,rows],['cnyes',first?[]:cn]])if(id&&health[id]&&collectArticles(items,scope).some(a=>a.keys.some(k=>freshKeys.has(k))))health[id].lastNew=Date.now();
-  write('news-seen.json',{...saveNewsState(newsState),health});
-  const list=ns.scope==='watch'?fresh.filter(a=>a.ids.some(id=>watch.has(id))):fresh,quiet=quietNow(x.hour,ns.quiet),{meta}=uniIndex();
-  if(list.length)addAlerts(x.date,list.map(a=>newsAlert(a,{meta,watch,quiet,time:x.hms})));
-  newsStatus={at:Date.now(),error:errors.join('；'),found:list.length,seeded};
+  write('news-seen.json',{...saveNewsState(newsState),health:newsHealth});
+}
+async function scanNewsOnce(){
+  if(!newsState)newsState=createNewsState(read('news-seen.json',null));
+  const started=Date.now(),generation=newsGeneration,scopeRef=researchScope,health=newsHealth,x=clock(),dates=x.hour<8?[minusDays(x.date,1),x.date]:[x.date];
+  // Keep the first/resume decision with this batch, including replies after later ticks.
+  const forceSeed=!newsState.at||started-newsState.at>10*60e3;
+  const fmId=data.has('marketNews')?data.source('marketNews'):null,scope=new Set(scopeIds(researchScope));
+  const sources=[
+    ...(fmId?[{id:fmId,interval:58e3,request:async()=>{const rows=[];for(const date of dates)rows.push(...await data.marketNews(date));return rows;}}]:[]),
+    ...(cnyesOn()?[
+      {id:'cnyes',interval:58e3,request:()=>cnyesNews()},
+      ...Object.keys(RSS_SOURCES).map(id=>({id,interval:RSS_INTERVAL,request:()=>fetchRssNews(id,{stocks:uniIndex().list,scope})}))
+    ]:[]),
+  ];
+  await Promise.all(sources.map(({id,interval,request})=>newsPoller.poll({
+    id,interval,health,request,isCurrent:()=>generation===newsGeneration&&scopeRef===researchScope&&normalizeNews(settings.news).enabled,
+    onAttempt:persistNews,
+    onResult:(rows,success)=>{
+      newsPauseUntil=fmId?health[fmId]?.pausedUntil||0:0;
+      if(!newsState)newsState=createNewsState(read('news-seen.json',null));
+      let fresh=[],seeded=false;
+      if(success){
+        ({fresh,seeded}=scanNewsSource(newsState,id,rows,{scope,forceSeed}));
+        if(fresh.length)health[id].lastNew=Date.now();
+      }
+      persistNews();
+      const ns=normalizeNews(settings.news),watch=new Set(watchlist),list=ns.scope==='watch'?fresh.filter(a=>a.ids.some(id=>watch.has(id))):fresh;
+      const quiet=quietNow(x.hour,ns.quiet),{meta}=uniIndex();
+      if(list.length)addAlerts(x.date,list.map(a=>newsAlert(a,{meta,watch,quiet,time:x.hms})));
+      const error=newsSources().filter(s=>s.enabled&&s.error).map(s=>`${s.provider}: ${s.error}`).join('；');
+      newsStatus={at:Date.now(),error,found:(newsStatus.at>=started?newsStatus.found:0)+list.length,seeded};
+    },
+  })));
 }
 
 setInterval(()=>{
-  if(!normalizeNews(settings.news).enabled||!(data.has('marketNews')||cnyesOn())||newsBusy||Date.now()-newsStatus.at<58e3)return;
-  newsBusy=true;
-  scanNewsOnce().catch(e=>{newsStatus={...newsStatus,at:Date.now(),error:e.message};}).finally(()=>{newsBusy=false;});
+  if(!normalizeNews(settings.news).enabled||!(data.has('marketNews')||cnyesOn()))return;
+  scanNewsOnce().catch(e=>{newsStatus={...newsStatus,at:Date.now(),error:e.message};});
 },5000).unref();
-const newsSources=()=>[...new Set(['finmind',data.has('marketNews')?data.source('marketNews'):null,...(cnyesOn()?['cnyes']:[])].filter(Boolean))].map(id=>newsSourceInfo(newsHealth,id,{enabled:normalizeNews(settings.news).enabled&&(id==='cnyes'?cnyesOn():data.has('marketNews')&&data.source('marketNews')===id),retryAt:id==='finmind'?fmRetry(['TaiwanStockNews:all']):0}));
-const newsInfo=()=>({...normalizeNews(settings.news),capable:data.has('marketNews')||cnyesOn(),sources:[data.has('marketNews')?data.source('marketNews'):null,cnyesOn()?'cnyes':null].filter(Boolean),status:{sources:newsSources(),at:newsStatus.at||null,error:newsStatus.error,found:newsStatus.found,seeded:newsStatus.seeded,today:alertsFor(today()).list.filter(a=>a.type==='news').length,pausedUntil:fmRetry(['TaiwanStockNews:all'],newsPauseUntil)>Date.now()?fmRetry(['TaiwanStockNews:all'],newsPauseUntil):null}});
+const newsSources=()=>[...new Set(['finmind',data.has('marketNews')?data.source('marketNews'):null,...(cnyesOn()?['cnyes',...Object.keys(RSS_SOURCES)]:[])].filter(Boolean))].map(id=>newsSourceInfo(newsHealth,id,{enabled:normalizeNews(settings.news).enabled&&(id==='cnyes'||RSS_SOURCES[id]?cnyesOn():data.has('marketNews')&&data.source('marketNews')===id),retryAt:id==='finmind'?fmRetry(['TaiwanStockNews:all']):0,interval:RSS_SOURCES[id]?RSS_INTERVAL:0}));
+const newsInfo=()=>({...normalizeNews(settings.news),capable:data.has('marketNews')||cnyesOn(),sources:[data.has('marketNews')?data.source('marketNews'):null,...(cnyesOn()?['cnyes',...Object.keys(RSS_SOURCES)]:[])].filter(Boolean),status:{sources:newsSources(),at:newsStatus.at||null,error:newsStatus.error,found:newsStatus.found,seeded:newsStatus.seeded,today:alertsFor(today()).list.filter(a=>a.type==='news').length,pausedUntil:fmRetry(['TaiwanStockNews:all'],newsPauseUntil)>Date.now()?fmRetry(['TaiwanStockNews:all'],newsPauseUntil):null}});
 
 /* ---------- 推理模型 ---------- */
 // 金鑰以服務代號保存（anthropic、openai、gemini、compatible）；OpenAI 相容端點（例如本機模型）可不設金鑰
@@ -1354,7 +1367,7 @@ const server = http.createServer(async (req,res) => {
     if(route==='/api/monitor'&&req.method==='GET')return json(res,200,{enabled:settings.monitor!==false,snapshot:{provider:data.pick('snapshot')?.id||null,error:monitorError,asOf:liveHeat?.data?.asOf||null},capable:data.has('snapshot'),mode:data.snapshotMode(),every:snapPlan().every,window:liveWindow(),lastAt:liveHeat?.at||null,asOf:liveHeat?.data?.asOf||null,error:monitorError,pausedUntil:(data.source('snapshot')==='finmind'?fmRetry(['/taiwan_stock_tick_snapshot'],monitorPauseUntil):monitorPauseUntil)>Date.now()?(data.source('snapshot')==='finmind'?fmRetry(['/taiwan_stock_tick_snapshot'],monitorPauseUntil):monitorPauseUntil):null,radar:normalizeRadar(settings.radar),replayDays:listDays(),news:newsInfo(),stream:streamInfo()});
     if(route==='/api/news/settings'&&req.method==='POST'){
       const b=await body(req);if(!validNewsInput(b))throw new UserError('新聞推播設定格式錯誤');
-      const was=normalizeNews(settings.news).enabled;settings={...settings,news:normalizeNews(b)};saveSettings();
+      const was=normalizeNews(settings.news).enabled;settings={...settings,news:normalizeNews(b)};saveSettings();newsGeneration++;
       if(!was&&settings.news.enabled){newsStatus={...newsStatus,at:0,error:''};newsPauseUntil=0;for(const s of Object.values(newsHealth))s.pausedUntil=null;} // 剛開啟：立即掃描（第一次只記錄現有新聞）
       return json(res,200,{ok:true,news:newsInfo()});
     }

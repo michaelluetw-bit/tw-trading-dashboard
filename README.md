@@ -1,5 +1,7 @@
 # EquiLens (衡析) · Taiwan stock trading dashboard
 
+Taiwan research-list news also uses TechNews and Liberty Times Finance RSS, polled independently every five minutes with conservative company matching, per-source health and shared deduplication. See [news notifications](docs/features/news-push.md).
+
 FinMind credential state is separate from entitlement evidence. Existing eligibility is preserved; invalid or paused credentials stop requests. Unknown access does not imply a paid plan. See [credential and capability state](docs/features/finmind-access.md).
 
 Shioaji quotes, custom-alert status and provisional daily chart bars share the existing current-session subscription cache (up to 200 symbols). Disconnections clear live values. Provisional bars are returned without rewriting history or the closing workflow. FinMind and cnyes news show separate last-success, last-new-article, error and retry times.

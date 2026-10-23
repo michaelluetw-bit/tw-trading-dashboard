@@ -36,8 +36,8 @@ export function collectArticles(rows, scope) {
 // state：{ seen: Map(key → 首次看到的時間), at }；第一次（或停掉超過 10 分鐘後）只記錄、不視為新聞，避免一次湧入大量舊聞
 // sources：已經記錄過的新聞來源；新加入的來源第一次的文章（seedOnly）只記錄、不推播
 export function createNewsState(saved) { return { seen: new Map(Object.entries(saved?.seen || {})), at: saved?.at || 0, sources: new Set(saved?.sources || []) }; }
-export function scanNews(state, rows, { scope, now = Date.now(), seedOnly = [] } = {}) {
-  const seed = !state.at || now - state.at > 10 * 60e3, fresh = [];
+export function scanNews(state, rows, { scope, now = Date.now(), seedOnly = [], forceSeed = false } = {}) {
+  const seed = forceSeed || !state.at || now - state.at > 10 * 60e3, fresh = [];
   for (const a of collectArticles(seedOnly, scope)) for (const k of a.keys) if (!state.seen.has(k)) state.seen.set(k, now);
   for (const a of collectArticles(rows, scope)) {
     if (a.keys.some(k => state.seen.has(k))) { for (const k of a.keys) if (!state.seen.has(k)) state.seen.set(k, now); continue; }
@@ -50,3 +50,11 @@ export function scanNews(state, rows, { scope, now = Date.now(), seedOnly = [] }
 }
 export const saveNewsState = s => ({ at: s.at, seen: Object.fromEntries(s.seen), sources: [...(s.sources || [])] });
 export const quietNow = (hour, on) => on && (hour >= QUIET_HOURS[0] || hour < QUIET_HOURS[1]);
+
+// Added publishers seed their first non-empty batch without re-seeding each poll.
+export function scanNewsSource(state, id, rows, options = {}) {
+  const first = id !== 'finmind' && rows.length > 0 && !state.sources.has(id);
+  const result = scanNews(state, first ? [] : rows, { ...options, seedOnly: first ? rows : [] });
+  if (rows.length) state.sources.add(id);
+  return result;
+}
