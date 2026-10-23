@@ -3150,5 +3150,10 @@
  "金鑰由環境變數管理": "Key managed by the environment",
  "金鑰移除未完成，FinMind 已停用": "Key removal incomplete; FinMind disabled",
  "現價 {0} · {1}": "Current price {0} · {1}",
- "等待有效即時報價": "Waiting for a valid live quote"
+ "等待有效即時報價": "Waiting for a valid live quote",
+ "RSS 新聞讀取失敗，請稍後重試": "RSS news could not be read; retry later",
+ "科技新報": "TechNews",
+ "自由財經": "Liberty Times Finance",
+ "科技新報與自由財經 RSS 各每五分鐘讀取一次；僅保留能明確對應研究名單公司的文章，首次只記錄不推播。": "TechNews and Liberty Times Finance RSS are checked every five minutes. Only articles clearly linked to research-list companies are included; the first batch is recorded without notifications.",
+ "新聞推播已開啟，依來源時程掃描": "News push is on; each source follows its own schedule"
 }

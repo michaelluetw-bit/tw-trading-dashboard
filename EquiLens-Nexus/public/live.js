@@ -313,7 +313,7 @@ export function newsSettings() {
   if (!L.monitor) { refreshMonitor().then(() => C.page() === 'settings' && C.redraw()); return ''; }
   const n = L.monitor.news || { enabled: false, scope: 'all', quiet: false };
   return `<section class="panel contentpad" id="news-settings"><h2>🗞️ 新聞推播 <span class="tag ${n.enabled ? 'cyan' : ''}">${n.enabled ? 'ON' : 'OFF'}</span></h2>
-  <p>開啟後每分鐘掃描一次資料源的全市場新聞（以 FinMind 為例約 60 次請求／小時；當地時間 00:00–08:00 另查前一日，約 120 次／小時；FinMind 新聞約每 2 小時更新一批），台股另每分鐘查一次鉅亨網最新新聞（幾分鐘內就有）。研究族群的成分股一出現新新聞，就推播到手機、在電腦跳出通知，並列入盤中雷達的「新聞」分類。論壇貼文、個股概覽頁與同一則新聞在不同來源的重複轉載會自動略過。</p>
+  <p>開啟後每分鐘掃描一次資料源的全市場新聞（以 FinMind 為例約 60 次請求／小時；當地時間 00:00–08:00 另查前一日，約 120 次／小時；FinMind 新聞約每 2 小時更新一批），台股另每分鐘查一次鉅亨網最新新聞（幾分鐘內就有）。研究族群的成分股一出現新新聞，就推播到手機、在電腦跳出通知，並列入盤中雷達的「新聞」分類。論壇貼文、個股概覽頁與同一則新聞在不同來源的重複轉載會自動略過。</p><p>科技新報與自由財經 RSS 各每五分鐘讀取一次；僅保留能明確對應研究名單公司的文章，首次只記錄不推播。</p>
   <div class="news-set"><label class="checkbox"><input type="checkbox" data-npush="enabled" ${n.enabled ? 'checked' : ''}><b>開啟新聞推播</b></label>
   <label class="field">推播範圍<select data-npush="scope"><option value="all" ${n.scope === 'all' ? 'selected' : ''}>全部研究族群成分股</option><option value="watch" ${n.scope === 'watch' ? 'selected' : ''}>只推自選股</option></select></label>
   <label class="checkbox"><input type="checkbox" data-npush="quiet" ${n.quiet ? 'checked' : ''}>夜間勿擾（23:00–07:00 只記錄、不推播）</label></div>
@@ -323,7 +323,7 @@ export function newsSettings() {
 async function saveNews(patch) {
   const cur = L.monitor?.news || { enabled: false, scope: 'all', quiet: false }, next = { enabled: cur.enabled, scope: cur.scope, quiet: cur.quiet, ...patch };
   const r = await C.api('news/settings', next); L.monitor = { ...L.monitor, news: r.news };
-  C.toast(next.enabled ? (patch.enabled ? '新聞推播已開啟，每分鐘掃描一次' : '新聞推播設定已儲存') : '新聞推播已關閉');
+  C.toast(next.enabled ? (patch.enabled ? '新聞推播已開啟，依來源時程掃描' : '新聞推播設定已儲存') : '新聞推播已關閉');
   if (next.enabled) loadAlerts(!L.date);
   if (C.page() === 'settings') C.redraw();
 }

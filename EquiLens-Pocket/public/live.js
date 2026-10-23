@@ -300,7 +300,7 @@ export function newsSettingsCard() {
   const n = L.monitor.news || { enabled: false, scope: 'all', quiet: false }, s = n.status || {};
   const status = !n.enabled ? '目前關閉' : s.error && !s.sources?.length ? `⚠ ${esc(s.error)}` : s.at ? `上次掃描 ${hhmmss(s.at)} · 今日新聞 ${s.today || 0} 則` : '即將開始第一次掃描';
   return `<section class="card" id="news-set"><div class="card-h"><h2>🗞️ 新聞推播</h2></div><div class="card-b">
-    <div class="lv-rule"><label class="lv-sw"><input type="checkbox" data-npush="enabled" ${n.enabled ? 'checked' : ''}><span></span></label><div><b>新聞推播</b><small>每分鐘掃描一次研究族群成分股的個股新聞（FinMind＋台股的鉅亨網），有新新聞立即推播（點通知直接開原文）。論壇貼文與重複轉載會自動略過；剛開啟時，已有的新聞只記錄不推播。</small></div></div>
+    <div class="lv-rule"><label class="lv-sw"><input type="checkbox" data-npush="enabled" ${n.enabled ? 'checked' : ''}><span></span></label><div><b>新聞推播</b><small>每分鐘掃描一次研究族群成分股的個股新聞（FinMind＋台股的鉅亨網），有新新聞立即推播（點通知直接開原文）。論壇貼文與重複轉載會自動略過；剛開啟時，已有的新聞只記錄不推播。</small><small>科技新報與自由財經 RSS 各每五分鐘讀取一次；僅保留能明確對應研究名單公司的文章，首次只記錄不推播。</small></div></div>
     <div class="lv-rule"><div style="flex:1"><b>推播範圍</b><div class="seg" style="margin-top:8px">${[['all', '全部研究族群'], ['watch', '只推自選股']].map(([v, l]) => `<button class="${n.scope === v ? 'on' : ''}" data-npush-scope="${v}">${l}</button>`).join('')}</div></div></div>
     <div class="lv-rule"><label class="lv-sw"><input type="checkbox" data-npush="quiet" ${n.quiet ? 'checked' : ''}><span></span></label><div><b>夜間勿擾</b><small>23:00–07:00 只記錄到雷達、不推播</small></div></div>
     <p class="set-p muted">狀態：${status}${newsSourcesHTML(n,{t:tx,time:ms=>MK.dateTime(ms)})}${L.push.state !== 'on' ? `<br>${['unsupported', 'denied'].includes(L.push.state) ? pushHelp(L.push.state) : '這支手機的通知尚未開啟：請到「盤中 → 雷達」按「開啟通知」'}` : ''}</p></div></section>`;
@@ -309,7 +309,7 @@ async function saveNews(patch) {
   const cur = L.monitor?.news || { enabled: false, scope: 'all', quiet: false };
   const r = await C.api('api/news/settings', { enabled: cur.enabled, scope: cur.scope, quiet: cur.quiet, ...patch });
   L.monitor = { ...L.monitor, news: r.news }; const el = C.$('#news-set'); if (el) el.outerHTML = newsSettingsCard();
-  C.toast(r.news.enabled ? (patch.enabled ? '新聞推播已開啟，每分鐘掃描一次' : '新聞推播設定已儲存') : '新聞推播已關閉');
+  C.toast(r.news.enabled ? (patch.enabled ? '新聞推播已開啟，依來源時程掃描' : '新聞推播設定已儲存') : '新聞推播已關閉');
 }
 
 /* ---------- 推播 ---------- */
