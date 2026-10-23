@@ -224,7 +224,7 @@ function paintChart() {
     <div data-chart-source>${d?.feed?boardFeedNotice(d.feed):''}${d?.provider==='shioaji'&&!q?esc(boardUnavailableLabel(d.status||d.feed?.status)):''}</div><div class="statusline">${live ? `<span class="pill"><span class="dot live"></span>盤中 · 每 10 秒更新 ${esc(q?.time || '')}</span>` : q?.date ? `<span class="pill">${md(q.date)} ${esc(q.time || '')}</span>` : ''}</div>
     <div class="seg" style="margin-bottom:10px">${PERIODS.map(([v, l]) => `<button class="${K.period === v ? 'on' : ''}" data-cperiod="${v}">${l}</button>`).join('')}</div>
     <section class="card"><div class="card-b">${chart}${caption ? `<p class="ix-foot">${caption}</p>` : ''}</div></section>
-    <div class="upd-row">${C.inScope(id) ? `<button class="btn primary" data-stock-detail="${id}">個股診斷</button>` : '<span></span>'}<button class="btn" data-chart-refresh>⟳ 重新整理</button></div>${rulesCard({ id, name: d?.name || s?.name || id, close: price })}</div>`;
+    <div class="upd-row">${C.inScope(id) ? `<button class="btn primary" data-stock-detail="${id}">個股診斷</button>` : '<span></span>'}<button class="btn" data-chart-refresh>⟳ 重新整理</button></div>${rulesCard({ id, name: d?.name || s?.name || id, quote: q, live: !!live })}</div>`;
 }
 
 /* ---------- 任何介面點個股：開啟走勢＋K 線＋五檔／明細（同一個視窗） ---------- */

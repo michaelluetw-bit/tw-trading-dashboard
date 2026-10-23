@@ -9,6 +9,8 @@ Phone (PWA) ─▶ Cloudflare Tunnel ─▶ EquiLens Pocket (127.0.0.1:4340) ─
 Nexus is the only process that fetches or writes market data. Pocket is a thin, password-protected proxy with its own
 mobile UI and Web Push relay. There is no database and no build step: plain ES modules on Node 22+ and in the browser.
 
+The shared `priceRuleForm` accepts an explicit `{quote, live}` context. Chart views pass their quote rather than the displayed historical fallback. The form checks the local trading window and quote date before displaying a current-price or threshold hint; historical research details remain in a waiting state. It does not change saved rules or create subscriptions.
+
 ## Nexus (`EquiLens-Nexus/`)
 
 | Module | Role |

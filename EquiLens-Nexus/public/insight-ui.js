@@ -185,12 +185,13 @@ export function reportHTML(r, { compact = false } = {}) {
 
 /* ---------- 自訂提醒：規則清單與新增表單（電腦版個股視窗、盤中雷達頁；手機版個股頁、盤中分頁） ---------- */
 export const RULE_KINDS = [['above', '價格 ≥'], ['below', '價格 ≤'], ['pct-up', '漲幅 ≥ %'], ['pct-down', '跌幅 ≥ %'], ['volume', '預估量 ≥ 倍昨量']];
-// stock：{ id, name, close }（個股頁預填；沒有時顯示代號輸入框）
+// stock：{ id, name, quote, live }；歷史 close 不可當成提醒的現價或門檻提示。
 export function priceRuleForm(stock = null) {
-  const hint = stock?.close > 0 ? `現價 ${fmt(stock.close, 2)}` : '';
+  const q = stock?.quote, close = stock?.live === true && MK.isOpen() && q?.date === MK.today() && Number.isFinite(Number(q.close)) && Number(q.close) > 0 ? Number(q.close) : null;
+  const hint = stock ? close != null ? `現價 ${fmt(close, 2)} · ${esc(q.at || [q.date, q.time].filter(Boolean).join(' '))}` : '等待有效即時報價' : '';
   return `<form class="ix-pa-form" data-pa-form>${stock ? `<input type="hidden" name="stockId" value="${esc(stock.id)}">` : '<input name="stockId" placeholder="股票代號" required maxlength="16" autocomplete="off" inputmode="text" aria-label="股票代號">'}
   <select name="kind" aria-label="提醒條件">${RULE_KINDS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>
-  <input name="value" type="number" step="any" min="0" required placeholder="${stock?.close > 0 ? fmt(stock.close, 2).replace(/,/g, '') : '數值'}" aria-label="門檻數值">
+  <input name="value" type="number" step="any" min="0" required placeholder="${close != null ? fmt(close, 2).replace(/,/g, '') : '數值'}" aria-label="門檻數值">
   <input name="note" maxlength="60" placeholder="備註（選填）" aria-label="備註">
   <label class="ix-pa-rep"><input type="checkbox" name="repeat">重複提醒</label><button type="submit" class="primary">＋ 新增提醒</button>${hint ? `<small class="ix-pa-hint num">${hint}</small>` : ''}</form>`;
 }

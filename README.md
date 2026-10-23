@@ -4,6 +4,8 @@ FinMind credential state is separate from entitlement evidence. Existing eligibi
 
 Shioaji quotes, custom-alert status and provisional daily chart bars share the existing current-session subscription cache (up to 200 symbols). Disconnections clear live values. Provisional bars are returned without rewriting history or the closing workflow. FinMind and cnyes news show separate last-success, last-new-article, error and retry times.
 
+Custom-alert forms show a current price, quote time and threshold hint only from a same-day live quote during the trading window. Historical closes never populate those hints. Without a valid quote, the form waits for live data; saved rules remain unchanged.
+
 **A self-hosted Taiwan stock trading dashboard and research desk (tw-trading-dashboard).** EquiLens runs on your own computer: it ranks the companies you choose to
 research, shows where money is flowing, watches the market during the session, recognizes chart patterns and
 writes an after-market report with the AI model of your choice. You bring your own data sources and API keys;
