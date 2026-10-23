@@ -3148,5 +3148,7 @@
  "認證失敗，請重新驗證": "Authentication failed; verify again",
  "金鑰儲存未完成，FinMind 已停用，請重新驗證": "Key persistence incomplete; FinMind disabled, verify again",
  "金鑰由環境變數管理": "Key managed by the environment",
- "金鑰移除未完成，FinMind 已停用": "Key removal incomplete; FinMind disabled"
+ "金鑰移除未完成，FinMind 已停用": "Key removal incomplete; FinMind disabled",
+ "現價 {0} · {1}": "Current price {0} · {1}",
+ "等待有效即時報價": "Waiting for a valid live quote"
 }
